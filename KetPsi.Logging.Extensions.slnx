@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KetPsi.Extensions.Logging.Abstractions/KetPsi.Extensions.Logging.Abstractions.csproj" />
+    <Project Path="src/KetPsi.Extensions.Logging.Console/KetPsi.Extensions.Logging.Console.csproj" Id="0d7bdb56-347d-492c-833d-26d5282d74a6" />
+    <Project Path="src/KetPsi.Extensions.Logging.Generator/KetPsi.Extensions.Logging.Generator.csproj" Id="81c30729-0692-45cd-9623-d7eee69cd12b" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KetPsi.Extensions.Logging.Benchmarks/KetPsi.Extensions.Logging.Benchmarks.csproj" Id="708ca03e-d71a-4aab-89d6-e69ff607b041" />
+    <Project Path="tests/KetPsi.Extensions.Logging.Tests/KetPsi.Extensions.Logging.Tests.csproj" />
+  </Folder>
+</Solution>
