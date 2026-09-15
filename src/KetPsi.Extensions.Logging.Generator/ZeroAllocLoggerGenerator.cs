@@ -169,7 +169,7 @@ namespace System.Runtime.CompilerServices
         string structName = $"LogState_{id}";
 
         // 1. GENERATE STRUCT
-        sb.AppendLine($"        internal readonly struct {structName} : IDeferredUtf8Formatter, IReadOnlyList<KeyValuePair<string, object?>>");
+        sb.AppendLine($"        internal readonly struct {structName} : IDeferredUtf8Formatter, IStructuredLogState");
         sb.AppendLine("        {");
 
         foreach (var arg in args) sb.AppendLine($"            private readonly LogParameter<{GetWrapperType(arg)}> _arg{arg.Index};");
@@ -180,6 +180,11 @@ namespace System.Runtime.CompilerServices
         sb.AppendLine("            {");
         foreach (var arg in args) sb.AppendLine($"                _arg{arg.Index} = arg{arg.Index};");
         sb.AppendLine("            }");
+        sb.AppendLine();
+
+        // --> NEW: Expose the message template natively
+        sb.AppendLine($"            public ReadOnlySpan<char> OriginalFormat => \"{call.OriginalFormatBuilder}\";");
+        sb.AppendLine();
 
         sb.AppendLine("            public void FormatTo(IBufferWriter<byte> writer)");
         sb.AppendLine("            {");
@@ -189,30 +194,17 @@ namespace System.Runtime.CompilerServices
             else sb.AppendLine($"                _arg{part.Index}.FormatTo(writer);");
         }
         sb.AppendLine("            }");
+        sb.AppendLine();
 
-        sb.AppendLine("            public int Count => " + (args.Count + 1) + ";");
-        sb.AppendLine("            public KeyValuePair<string, object?> this[int index] => index switch");
+        sb.AppendLine("            [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]");
+        sb.AppendLine("            public void WriteParameters<TWriter>(ref TWriter writer) where TWriter : struct, ILogParameterWriter");
         sb.AppendLine("            {");
-        foreach (var arg in args) sb.AppendLine($"                {arg.Index} => _arg{arg.Index}.ToKeyValuePair(),");
-        sb.AppendLine($"                {args.Count} => new KeyValuePair<string, object?>(\"{{OriginalFormat}}\", \"{call.OriginalFormatBuilder}\"),");
-        sb.AppendLine("                _ => throw new IndexOutOfRangeException()");
-        sb.AppendLine("            };");
-
-        // Custom Struct Enumerator (Zero allocations)
-        sb.AppendLine($"            public struct Enumerator : IEnumerator<KeyValuePair<string, object?>>");
-        sb.AppendLine("            {");
-        sb.AppendLine($"                private readonly {structName} _state;");
-        sb.AppendLine("                private int _index;");
-        sb.AppendLine($"                public Enumerator({structName} state) {{ _state = state; _index = -1; }}");
-        sb.AppendLine("                public bool MoveNext() { _index++; return _index < _state.Count; }");
-        sb.AppendLine("                public KeyValuePair<string, object?> Current => _state[_index];");
-        sb.AppendLine("                object System.Collections.IEnumerator.Current => Current;");
-        sb.AppendLine("                public void Reset() => _index = -1;");
-        sb.AppendLine("                public void Dispose() { }");
+        foreach (var arg in args)
+        {
+            sb.AppendLine($"                writer.Write(in _arg{arg.Index});");
+        }
         sb.AppendLine("            }");
-        sb.AppendLine("            public Enumerator GetEnumerator() => new Enumerator(this);");
-        sb.AppendLine("            IEnumerator<KeyValuePair<string, object?>> IEnumerable<KeyValuePair<string, object?>>.GetEnumerator() => GetEnumerator();");
-        sb.AppendLine("            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();");
+        sb.AppendLine();
 
         sb.AppendLine("            public override string ToString() => \"" + call.OriginalFormatBuilder.ToString() + "\";");
 
@@ -274,7 +266,6 @@ namespace System.Runtime.CompilerServices
             }
             else if (arg.Format != null && arg.Format.StartsWith("mask"))
             {
-                // Dynamic parsing of the mask index (e.g. 0..4 or ^4..^0)
                 string startIdx = "0";
                 string endIdx = "^4";
 
