@@ -1,4 +1,5 @@
-﻿using KetPsi.Extensions.Logging.Console.Internals;
+﻿using KetPsi.Extensions.Logging.Console;
+using KetPsi.Extensions.Logging.Console.Internals;
 using KetPsi.Extensions.Logging.Console.Internals.Formatters;
 using KetPsi.Extensions.Logging.Console.Internals.ZeroAllocLogger;
 
@@ -12,11 +13,11 @@ namespace KetPsi.Extensions.Logging.Console;
 
 public static partial class ConsoleLoggerExtensions
 {
-    public static ILoggingBuilder AddConsole(this ILoggingBuilder config)
+    public static ILoggingBuilder AddZeroAllocConsole(this ILoggingBuilder config)
     {
-        return AddConsole(config, c => c);
+        return AddZeroAllocConsole(config, c => c);
     }
-    public static ILoggingBuilder AddConsole(this ILoggingBuilder config, Func<IZeroAllocConsoleLoggerConfig, IZeroAllocConsoleLoggerConfig> configure)
+    public static ILoggingBuilder AddZeroAllocConsole(this ILoggingBuilder config, Func<IZeroAllocConsoleLoggerConfig, IZeroAllocConsoleLoggerConfig> configure)
     {
         var services = config.Services;
 
