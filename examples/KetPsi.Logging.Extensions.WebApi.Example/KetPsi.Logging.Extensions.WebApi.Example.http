@@ -1,0 +1,6 @@
+@KetPsi.Logging.Extensions.WebApi.Example_HostAddress = http://localhost:5230
+
+GET {{KetPsi.Logging.Extensions.WebApi.Example_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
