@@ -1,4 +1,16 @@
 <Solution>
+  <Folder Name="/.github/" />
+  <Folder Name="/.github/workflows/">
+    <File Path=".github/workflows/deploy.workflow.yml" />
+    <File Path=".github/workflows/unit-tests.workflow.yml" />
+  </Folder>
+  <Folder Name="/.github/workflows/actions/" />
+  <Folder Name="/.github/workflows/actions/nuget-pack/">
+    <File Path=".github/workflows/actions/nuget-pack/action.yml" />
+  </Folder>
+  <Folder Name="/.github/workflows/actions/nuget-push/">
+    <File Path=".github/workflows/actions/nuget-push/action.yml" />
+  </Folder>
   <Folder Name="/examples/">
     <Project Path="examples/KetPsi.Logging.Extensions.WebApi.Example/KetPsi.Logging.Extensions.WebApi.Example.csproj" Id="b6867d06-6678-4acc-9635-5e87b476b447" />
   </Folder>
