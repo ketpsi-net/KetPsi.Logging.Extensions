@@ -1,0 +1,31 @@
+<Project>
+    <PropertyGroup>
+        <Title>$(AssemblyName)</Title>
+        <Version>1.0.0</Version>
+		<Authors>KetPsi ,MohamadArsalan Imamverdi</Authors>
+		<PackageId>$(AssemblyName)</PackageId>
+        <PackageProjectUrl>https://github.com/ketpsi-net/KetPsi.Logging.Extensions</PackageProjectUrl>
+        <PackageReadmeFile>README.MD</PackageReadmeFile>
+        <RepositoryUrl>https://github.com/ketpsi-net/KetPsi.Logging.Extensions</RepositoryUrl>
+        <PackageIcon>icon.png</PackageIcon>
+        <Icon>icon.png</Icon>
+		<PackageTags>command shell process execution cross-platform</PackageTags>
+		<Copyright>Copyright © 2027</Copyright>
+		<PackageLicenseFile>LICENSE</PackageLicenseFile>
+		<PackageReleaseNotes>Initial package publish</PackageReleaseNotes>
+    </PropertyGroup>
+    <ItemGroup>
+         <None Include="README.MD">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+        <None Include="..\..\icon.png">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+        <None Include="..\..\LICENSE">
+            <Pack>True</Pack>
+            <PackagePath>\</PackagePath>
+        </None>
+    </ItemGroup>
+</Project>

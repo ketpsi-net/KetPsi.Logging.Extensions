@@ -14,6 +14,11 @@
   <Folder Name="/examples/">
     <Project Path="examples/KetPsi.Logging.Extensions.WebApi.Example/KetPsi.Logging.Extensions.WebApi.Example.csproj" Id="b6867d06-6678-4acc-9635-5e87b476b447" />
   </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="LICENSE" />
+    <File Path="README.MD" />
+    <File Path="version.props" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/KetPsi.Extensions.Logging.Abstractions/KetPsi.Extensions.Logging.Abstractions.csproj" />
     <Project Path="src/KetPsi.Extensions.Logging.Console/KetPsi.Extensions.Logging.Console.csproj" Id="0d7bdb56-347d-492c-833d-26d5282d74a6" />
