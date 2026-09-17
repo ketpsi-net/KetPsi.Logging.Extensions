@@ -1,8 +1,6 @@
 using KetPsi.Extensions.Logging.Console;
 using KetPsi.Extensions.Logging.OpenTelemetry;
 
-using OpenTelemetry.Logs;
-
 public partial class Program
 {
     private static readonly PaymentPayload _payload = new()
