@@ -51,6 +51,7 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.Abstractions/KetPsi.Extensions.Logging.Abstractions.csproj
       - name: Push KetPsi.Extensions.Logging.Abstractions
         env:
@@ -95,6 +96,7 @@ jobs:
         id: pack-console
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.Console/KetPsi.Extensions.Logging.Console.csproj
       - name: Push KetPsi.Extensions.Logging.Console
         env:
@@ -114,6 +116,7 @@ jobs:
         id: pack-opentelemetry
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.OpenTelemetry/KetPsi.Extensions.Logging.OpenTelemetry.csproj
       - name: Push KetPsi.Extensions.Logging.OpenTelemetry
         env:
