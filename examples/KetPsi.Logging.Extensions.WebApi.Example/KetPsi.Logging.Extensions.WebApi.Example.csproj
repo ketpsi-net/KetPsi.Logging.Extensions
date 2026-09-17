@@ -7,11 +7,7 @@
 	  <InterceptorsPreviewNamespaces>$(InterceptorsNamespaces);KetPsi.Extensions.Logging</InterceptorsPreviewNamespaces>
 	  <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="AtiyanSeir.Observability.Defaults" Version="2.7.0" />
-  </ItemGroup>
-
+  
   <ItemGroup>
     <ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.Console\KetPsi.Extensions.Logging.Console.csproj" />
     <ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.Generator\KetPsi.Extensions.Logging.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />

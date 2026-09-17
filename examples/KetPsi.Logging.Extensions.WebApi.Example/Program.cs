@@ -1,9 +1,8 @@
-using AtiyanSeir.Observability.Defaults;
-
 using KetPsi.Extensions.Logging.Console;
 using KetPsi.Extensions.Logging.OpenTelemetry;
 
 using OpenTelemetry.Logs;
+
 public partial class Program
 {
     private static readonly PaymentPayload _payload = new()
@@ -25,19 +24,6 @@ public partial class Program
     {
         var builder = WebApplication.CreateBuilder(args);
         builder.Logging.ClearProviders().AddZeroAllocConsole().AddZeroAllocOtlp();
-        //builder.Services.AddLogging(builder =>
-        //{
-        //    builder.AddOpenTelemetry(otp =>
-        //    {
-        //        otp.AddOtlpExporter(otlp =>
-        //        {
-        //            otlp.Endpoint = new Uri("http://localhost:4318/v1/logs");
-        //            otlp.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
-        //        });
-        //    });
-        //});
-        //builder.AddObservabilityDefaults();
-        // Add services to the container.
 
         var app = builder.Build();
 
