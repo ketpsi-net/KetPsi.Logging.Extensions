@@ -1,13 +1,12 @@
-# KetPsi.Extensions.Logging
+# KetPsi.Extensions.Logging 🚀
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![NuGet](https://img.shields.io/nuget/v/KetPsi.Extensions.Logging.Abstractions.svg)](https://www.nuget.org/packages/KetPsi.Extensions.Logging.Abstractions/)
 [![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%209.0%20%7C%2010.0-purple.svg?style=flat-square)](https://dotnet.microsoft.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 
 **KetPsi.Extensions.Logging** is a compile-time, zero-allocation structured logging engine for .NET. 
 
 It eliminates the tension between **Developer Experience (DX)** and **bare-metal runtime performance**. By pairing **C# 12 Interceptors** and **Roslyn Source Generators** with direct UTF-8 OS-stream writing, `KetPsi` allows you to write clean interpolated strings (`$"..."`) without breaking structured telemetry and without allocating memory on the heap.
-
----
 
 ## The Problem
 
@@ -29,21 +28,17 @@ public static partial void LogOrderFailed(ILogger logger, string orderId, string
 
 ---
 
-## Features
+## Key Features
 
 - **Ergonomic String Interpolation:** Write natural `$"{value}"` syntax without string concatenation allocations.
 - **Explicit Structured Keys:** Set telemetry property names inline using the `@` prefix (`{orderId:@OrderId}`).
-- **Compile-Time Interception:** Hijacks log invocations using C# 12 Interceptors—no reflection or runtime parsing overhead.
-- **True Zero-Allocation Core:** Value types pass as custom unboxed structs down to UTF-8 byte buffers.
+- **Zero Boxing:** Native types (`int`, `Guid`, `DateTime`, etc.) remain on the stack.
 - **Inline Masking & Transformations:** Mask sensitive data (`:mask:4..8`) directly in the template with zero heap allocations.
 - **Inline Zero-Alloc JSON:** Serialize objects (`:json`) directly into native byte writers.
-- **Full Microsoft Ecosystem Alignment:** Respects `appsettings.json` hot-reloading, log levels, namespace filters, and DI options pattern via `[ProviderAlias("Console")]`.
-
----
 
 ## Benchmark Comparison
 
-Benchmark executed using **BenchmarkDotNet v0.14.0** on .NET 8 / 9 (x64):
+Benchmark executed using **BenchmarkDotNet v0.14.0** on .NET 8 / 9 (x64) on Conolse logger:
 
 | Method                                        | Mean       | Ratio | Gen0   | Allocated | Alloc Ratio |
 |:--------------------------------------------- |-----------:|------:|-------:|----------:|------------:|
@@ -65,41 +60,38 @@ Benchmark executed using **BenchmarkDotNet v0.14.0** on .NET 8 / 9 (x64):
 > *\* Note: 15 B represents the benchmark test object instantiation; framework allocation is 0 B.*  
 > *\*\* Note: 74 B is the unavoidable .NET CLR `AsyncLocal` context-flow tax.*
 
+And for the OpenTelemetry logger:
+
+| Method                                 | Mean          | Error       | StdDev     | Ratio  | RatioSD  | Gen0   | Gen1   | Allocated | Alloc Ratio |
+|----------------------------------------|--------------:|------------:|-----------:|-------:|---------:|-------:|-------:|----------:|------------:|
+| Microsoft Standard LogInformation      | 860.70 ns     | 13.031 ns   | 11.552 ns  |  1.00  |    0.02  | 0.0782 | 0.0381 |    1024 B |        1.00 |
+| **KetPsi Interpolated LogInformation** |  **39.10 ns** |**0.419 ns** |**0.350 ns**|**0.05**| **0.00** |**-**   | **-**  | **-**     |**0.00**     |
+
 ---
 
-## Installation & Setup
+## Usage & Setup
 
-### 1. Enable Interceptors in your `.csproj`
-C# 12 Interceptors require explicit compiler opt-in:
+This package is typically consumed implicitly by the specific KetPsi logger implementations (Console, OpenTelemetry). However, you must enable C# 12 Interceptors in your `.csproj` to allow the Roslyn generator to hijack the log calls:
 
 ```xml
 <PropertyGroup>
   <TargetFramework>net8.0</TargetFramework>
   <ImplicitUsings>enable</ImplicitUsings>
   <Nullable>enable</Nullable>
+  <!-- REQUIRED: Opt-in to C# 12 Interceptors -->
   <InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);KetPsi.Extensions.Logging</InterceptorsPreviewNamespaces>
 </PropertyGroup>
 ```
 
-### 2. Install the Package
-```bash
-dotnet add package KetPsi.Extensions.Logging
-```
-
-### 3. Register the Provider
-In your `Program.cs`:
+Once configured, standard string interpolation is transformed into a zero-allocation operation:
 
 ```csharp
-var builder = WebApplication.CreateBuilder(args);
-
-// Register the Zero-Alloc Console Logger
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
-
-var app = builder.Build();
+logger.LogInformation($"Processed order {orderId:@OrderId} for customer {customerId:@CustomerId}");
 ```
 
----
+For configuring console logger read: [(ConsolseLogger configuration)](https://github.com/ketpsi-net/KetPsi.Logging.Extensions/tree/main/src/KetPsi.Extensions.Logging.Console)
+
+For configurting OpenTelemtery logger read: [(OpenTelemetryLogger configuration)](https://github.com/ketpsi-net/KetPsi.Logging.Extensions/tree/main/src/KetPsi.Extensions.Logging.OpenTelemetry)
 
 ## Syntax Guide
 
@@ -143,75 +135,5 @@ using (logger.StartScope($"Tenant: {tenantId:@TenantId}"))
 }
 ```
 
----
-
-## Configuration (`appsettings.json`)
-
-`KetPsi` uses the `[ProviderAlias("Console")]` metadata, making it a drop-in replacement for standard configuration sections:
-
-```json
-{
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
-    },
-    "Console": {
-      "FormatterName": "simple",
-      "LogToStandardErrorThreshold": "Error",
-      "FormatterOptions": {
-        "SingleLine": false,
-        "IncludeCategory": true,
-        "IncludeEventId": false,
-        "IncludeScopes": true,
-        "TimestampFormat": "yyyy-MM-dd HH:mm:ss.fff "
-      }
-    }
-  }
-}
-```
-
-Configuration reloads are monitored live via `IOptionsMonitor`—log level adjustments applied to `appsettings.json` take effect immediately without restarting the host.
-
----
-
-## Architecture
-
-```text
-[ Your Code: logger.LogInformation($"...") ]
-                        │
-                        ▼ (Compile-time interception)
-[ Roslyn Source Generator / Interceptor ]
-   - Extracts keys (@OrderId)
-   - Generates specialized unboxed struct
-                        │
-                        ▼ (Zero-Boxing Pass via Generic Delegate Cache)
-[ ZeroAllocationConsoleLogger ]
-   - Validates log levels via Microsoft filter engine
-   - Formats to ArrayBufferWriter<byte> in UTF-8
-                        │
-                        ▼ (ThreadStatic Buffer / Raw Byte Stream)
-[ ConsoleLogProcessor ]
-   - Direct flush to stdout / stderr stream handles
-```
-
-1. **Roslyn Interceptor:** Hijacks the call site at compile time, bypassing `params object[]` boxing and parameter allocation.
-2. **Static Generic Delegate Cache:** Invokes `IDeferredUtf8Formatter.FormatTo` without casting struct instances to interface types (which causes heap boxing).
-3. **Direct Byte Pipeline:** Streams raw UTF-8 spans directly to the OS console handles via a background channel consumer.
-
----
-
-## Roadmap
-
-- [x] C# 12 Interceptors and Roslyn Generator core pipeline.
-- [x] Custom zero-allocation `ConsoleLoggerProvider` drop-in replacement.
-- [x] In-template `:mask` and `:json` formatters.
-- [x] Comprehensive options configuration & live hot-reload support.
-- [ ] Standalone Console Application hosting support (non-Generic Host).
-- [ ] **OpenTelemetry Exporter Integration:** Custom zero-allocation exporter bridging directly to OTLP streams without boxing attributes.
-
----
-
 ## License
-
-This project is licensed under the [MIT License](LICENSE).
+MIT License

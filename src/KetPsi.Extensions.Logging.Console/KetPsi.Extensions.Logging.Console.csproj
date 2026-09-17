@@ -1,9 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+	<Import Project="../../version.props"></Import>
+
 	<PropertyGroup>
 		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+		<Description>A hyper-optimized, zero-allocation console logger for .NET. Writes structured logs and interpolated strings directly to standard output streams without heap allocations, boxing, or garbage collection overhead.</Description>
 	</PropertyGroup>
 
 	<ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">

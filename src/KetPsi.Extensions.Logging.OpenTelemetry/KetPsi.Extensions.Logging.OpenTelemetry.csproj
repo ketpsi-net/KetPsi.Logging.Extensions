@@ -1,14 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+	<Import Project="../../version.props"></Import>
 
 	<PropertyGroup>
 		<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<Description>A zero-allocation OpenTelemetry (OTLP) log exporter for .NET. Bypasses the official SDK to serialize logs directly into raw Protobuf bytes via a lock-free batcher, delivering 22x faster execution and zero GC pressure for extreme-throughput microservices.</Description>
 	</PropertyGroup>
 
 	<ItemGroup>
-	  <ProjectReference Include="..\KetPsi.Extensions.Logging.Abstractions\KetPsi.Extensions.Logging.Abstractions.csproj" />
+		<ProjectReference Include="..\KetPsi.Extensions.Logging.Abstractions\KetPsi.Extensions.Logging.Abstractions.csproj" />
 	</ItemGroup>
 
 
