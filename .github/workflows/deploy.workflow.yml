@@ -76,7 +76,7 @@ jobs:
         run: |
           for i in {1..20}; do
             dotnet nuget locals all --clear
-            if dotnet package search "$PACKAGE_NAME" --exact-match | grep "$PACKAGE_VERSION"; then
+            if dotnet package search "$PACKAGE_NAME" --exact-match --prerelease | grep "$PACKAGE_VERSION"; then
               echo "Package is available on NuGet!"
               exit 0
             fi
