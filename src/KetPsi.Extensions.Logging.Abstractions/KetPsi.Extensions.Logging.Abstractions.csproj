@@ -21,7 +21,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<None Include=".\KetPsi.Extensions.Logging.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Extensions.Logging.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Extensions.Logging.Generator.dll" Visible="false" />
+		<None Include="..\KetPsi.Extensions.Logging.Generator\bin\$(Configuration)\netstandard2.0\KetPsi.Extensions.Logging.Generator.dll" Pack="true" PackagePath="analyzers\dotnet\cs\KetPsi.Extensions.Logging.Generator.dll" Visible="false" />
 	</ItemGroup>
 
 	<ItemGroup>
