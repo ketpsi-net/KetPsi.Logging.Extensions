@@ -51,6 +51,7 @@ jobs:
         id: pack-abstraction
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.Abstractions/KetPsi.Extensions.Logging.Abstractions.csproj
       - name: Push KetPsi.Extensions.Logging.Abstractions
         env:
@@ -65,7 +66,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Set up .NET
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.x'
       - name: Wait for KetPsi.Extensions.Logging.Abstractions to be available
@@ -75,7 +76,7 @@ jobs:
         run: |
           for i in {1..20}; do
             dotnet nuget locals all --clear
-            if dotnet package search "$PACKAGE_NAME" --exact-match | grep "$PACKAGE_VERSION"; then
+            if dotnet package search "$PACKAGE_NAME" --exact-match --prerelease | grep "$PACKAGE_VERSION"; then
               echo "Package is available on NuGet!"
               exit 0
             fi
@@ -95,6 +96,7 @@ jobs:
         id: pack-console
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.Console/KetPsi.Extensions.Logging.Console.csproj
       - name: Push KetPsi.Extensions.Logging.Console
         env:
@@ -114,6 +116,7 @@ jobs:
         id: pack-opentelemetry
         uses: ./.github/workflows/actions/nuget-pack
         with:
+          solution_path: KetPsi.Logging.Extensions.slnx 
           project_path: src/KetPsi.Extensions.Logging.OpenTelemetry/KetPsi.Extensions.Logging.OpenTelemetry.csproj
       - name: Push KetPsi.Extensions.Logging.OpenTelemetry
         env:
