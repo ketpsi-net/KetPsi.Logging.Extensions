@@ -1,4 +1,5 @@
-﻿using System.Buffers;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
@@ -18,9 +19,8 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
     private int _pendingWriters;
 
-    // --- NEW: Cached Envelopes ---
     private readonly byte[] _cachedResourceBytes = [];
-    private readonly byte[] _cachedScopeBytes = [];
+    private readonly ConcurrentDictionary<string, byte[]> _scopeBytesCache = new(StringComparer.Ordinal);
 
     public OtlpBatcher(HttpClient httpClient, int queueCapacity, byte[] resource)
     {
@@ -29,7 +29,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         _spinLock = new SpinLock(enableThreadOwnerTracking: false);
         _pendingWriters = 0;
 
-        _cachedResourceBytes = resource;
+        _cachedResourceBytes = resource ?? [];
 
         var channelOptions = new BoundedChannelOptions(queueCapacity)
         {
@@ -43,7 +43,19 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         _timerTask = Task.Run(TimerLoopAsync);
     }
 
-    private static byte[] BuildCachedScopeBytes(string name, string version)
+    /// <summary>
+    /// Returns cached ScopeLogs.scope bytes for the logger category.
+    /// Zero-alloc after the first call per distinct category.
+    /// </summary>
+    public byte[] GetOrCreateScopeBytes(string categoryName)
+    {
+        if (string.IsNullOrEmpty(categoryName))
+            categoryName = "KetPsi";
+
+        return _scopeBytesCache.GetOrAdd(categoryName, static name => BuildScopeBytes(name, "1.0.0"));
+    }
+
+    private static byte[] BuildScopeBytes(string name, string version)
     {
         int nameBytes = System.Text.Encoding.UTF8.GetByteCount(name);
         int versionBytes = System.Text.Encoding.UTF8.GetByteCount(version);
@@ -59,8 +71,8 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         // ScopeLogs.scope = 1 (InstrumentationScope)
         writer.WriteTag(1, 2);
         writer.WriteVarInt((ulong)scopePayloadSize);
-        writer.WriteString(1, name.AsSpan());
-        writer.WriteString(2, version.AsSpan());
+        writer.WriteString(1, name.AsSpan());    // InstrumentationScope.name
+        writer.WriteString(2, version.AsSpan()); // InstrumentationScope.version
 
         return buffer;
     }
@@ -79,25 +91,32 @@ internal sealed class OtlpBatcher : IAsyncDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<byte> Reserve(int requiredSize, out BufferState stateRef)
+    public Span<byte> Reserve(int requiredSize, byte[] scopeBytes, out BufferState stateRef)
     {
         bool lockTaken = false;
         try
         {
             _spinLock.Enter(ref lockTaken);
 
-            if (_active.BytesWritten + requiredSize > _active.Array.Length)
+            // Retire when full or when logger category (scope) changes
+            bool scopeChanged = _active.ScopeBytes is not null
+                && !ReferenceEquals(_active.ScopeBytes, scopeBytes)
+                && _active.BytesWritten > 0;
+
+            if (scopeChanged || _active.BytesWritten + requiredSize > _active.Array.Length)
             {
                 _active.IsRetired = true;
                 Thread.MemoryBarrier();
 
                 if (Volatile.Read(ref _active.PendingWriters) == 0 && _active.BytesWritten > 0)
                 {
-                    _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten));
+                    _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten, _active.ScopeBytes!));
                 }
 
                 _active = new BufferState(BufferCapacity);
             }
+
+            _active.ScopeBytes ??= scopeBytes;
 
             stateRef = _active;
             Interlocked.Increment(ref stateRef.PendingWriters);
@@ -119,7 +138,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
         if (remaining == 0 && stateRef.IsRetired && stateRef.BytesWritten > 0)
         {
-            _channel.Writer.TryWrite(new BatchPayload(stateRef.Array, stateRef.BytesWritten));
+            _channel.Writer.TryWrite(new BatchPayload(stateRef.Array, stateRef.BytesWritten, stateRef.ScopeBytes!));
         }
     }
 
@@ -136,7 +155,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
             if (Volatile.Read(ref _active.PendingWriters) == 0)
             {
-                _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten));
+                _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten, _active.ScopeBytes ?? []));
             }
 
             _active = new BufferState(BufferCapacity);
@@ -147,10 +166,9 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         }
     }
 
-    internal int CalculateTotalRequestSize(int batchLength)
+    internal int CalculateTotalRequestSize(int batchLength, int scopeSize)
     {
-        int resourceSize = _cachedResourceBytes.Length;   // raw attributes
-        int scopeSize = _cachedScopeBytes.Length;         // already has Tag(1,2)
+        int resourceSize = _cachedResourceBytes.Length;
 
         int scopeLogsPayload = scopeSize + batchLength;
         int scopeLogsSize = 1 + ProtobufMath.GetVarIntSize((ulong)scopeLogsPayload) + scopeLogsPayload;
@@ -160,12 +178,11 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
         return 1 + ProtobufMath.GetVarIntSize((ulong)resourceLogsPayload) + resourceLogsPayload;
     }
-    internal int StitchNetworkPayload(byte[] batchBuffer, int batchLength, byte[] networkBuffer)
-    => StitchNetworkPayload(new BatchPayload(batchBuffer, batchLength), networkBuffer);
+
     internal int StitchNetworkPayload(BatchPayload batch, byte[] networkBuffer)
     {
         int resourceSize = _cachedResourceBytes.Length;
-        int scopeSize = _cachedScopeBytes.Length;
+        int scopeSize = batch.ScopeBytes.Length;
 
         int scopeLogsPayloadSize = scopeSize + batch.Length;
         int scopeLogsEnvelopeSize = 1 + ProtobufMath.GetVarIntSize((ulong)scopeLogsPayloadSize) + scopeLogsPayloadSize;
@@ -174,6 +191,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         int resourceLogsPayloadSize = resourceEnvelopeSize + scopeLogsEnvelopeSize;
 
         var writer = new ZeroAllocProtobufWriter(networkBuffer);
+
         // ExportLogsServiceRequest.resource_logs = 1
         writer.WriteTag(1, 2);
         writer.WriteVarInt((ulong)resourceLogsPayloadSize);
@@ -181,14 +199,14 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         // ResourceLogs.resource = 1
         writer.WriteTag(1, 2);
         writer.WriteVarInt((ulong)resourceSize);
-        writer.WriteRawBytes(_cachedResourceBytes);          // ← MUST be raw attributes
+        writer.WriteRawBytes(_cachedResourceBytes);
 
         // ResourceLogs.scope_logs = 2
         writer.WriteTag(2, 2);
         writer.WriteVarInt((ulong)scopeLogsPayloadSize);
 
-        // ScopeLogs.scope (already wrapped)
-        writer.WriteRawBytes(_cachedScopeBytes);
+        // ScopeLogs.scope (InstrumentationScope.name = logger category)
+        writer.WriteRawBytes(batch.ScopeBytes);
 
         // ScopeLogs.log_records
         writer.WriteRawBytes(batch.Buffer.AsSpan(0, batch.Length));
@@ -211,38 +229,29 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
                     try
                     {
-                        // 1. Calculate OTLP Exact Payload Size
-                        int totalRequestSize = CalculateTotalRequestSize(batch.Length);
-
-                        // 2. Rent Buffer & Stitch the Payload synchronously
+                        int totalRequestSize = CalculateTotalRequestSize(batch.Length, batch.ScopeBytes.Length);
                         networkBuffer = ArrayPool<byte>.Shared.Rent(totalRequestSize);
-
-                        // By calling a standard method, the ZeroAllocProtobufWriter is destroyed 
-                        // before we reach the 'await', satisfying the C# 12 compiler.
                         int bytesWritten = StitchNetworkPayload(batch, networkBuffer);
 
-                        // 3. Send over HTTP
                         using var content = new PooledArrayHttpContent(networkBuffer, bytesWritten);
                         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-protobuf");
 
                         using var response = await _httpClient.PostAsync(string.Empty, content, token).ConfigureAwait(false);
                     }
-                    catch (Exception ex)
+                    catch (Exception)
                     {
                     }
                     finally
                     {
                         if (networkBuffer != null)
-                        {
                             ArrayPool<byte>.Shared.Return(networkBuffer);
-                        }
 
                         ArrayPool<byte>.Shared.Return(batch.Buffer);
                     }
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
         }
     }
@@ -264,9 +273,10 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         _cts.Dispose();
     }
 
-    internal readonly struct BatchPayload(byte[] buffer, int length)
+    internal readonly struct BatchPayload(byte[] buffer, int length, byte[] scopeBytes)
     {
         public readonly byte[] Buffer = buffer;
         public readonly int Length = length;
+        public readonly byte[] ScopeBytes = scopeBytes;
     }
 }
