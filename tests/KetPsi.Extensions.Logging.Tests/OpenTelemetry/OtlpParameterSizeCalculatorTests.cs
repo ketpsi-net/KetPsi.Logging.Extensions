@@ -16,16 +16,16 @@ public class OtlpParameterSizeCalculatorAndEncoderTests
     // Helpers
     // ------------------------------------------------------------------
 
-    private static int ExpectedStringSize(string name, string value, uint fieldNumber = 1)
+    private static int ExpectedStringSize(string name, string value, uint fieldNumber = 6)
         => OtlpAttributeFormatter.CalculateStringSize(name.AsSpan(), value.AsSpan(), fieldNumber);
 
-    private static int ExpectedInt64Size(string name, long value, uint fieldNumber = 1)
+    private static int ExpectedInt64Size(string name, long value, uint fieldNumber = 6)
         => OtlpAttributeFormatter.CalculateInt64Size(name.AsSpan(), value, fieldNumber);
 
-    private static int ExpectedBoolSize(string name, bool value, uint fieldNumber = 1)
+    private static int ExpectedBoolSize(string name, bool value, uint fieldNumber = 6)
         => OtlpAttributeFormatter.CalculateBoolSize(name.AsSpan(), value, fieldNumber);
 
-    private static int ExpectedDoubleSize(string name, double value, uint fieldNumber = 1)
+    private static int ExpectedDoubleSize(string name, double value, uint fieldNumber = 6)
         => OtlpAttributeFormatter.CalculateDoubleSize(name.AsSpan(), value, fieldNumber);
 
     // ------------------------------------------------------------------

@@ -1,0 +1,65 @@
+using System.Buffers;
+
+namespace KetPsi.Extensions.Logging.OpenTelemetry.Internals;
+
+/// <summary>
+/// Minimal IBufferWriter over ArrayPool for one-shot UTF-8 rendering. Not thread-safe.
+/// </summary>
+internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
+{
+    private byte[]? _buffer;
+    private int _index;
+
+    public PooledByteBufferWriter(int initialCapacity = 256)
+    {
+        _buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
+        _index = 0;
+    }
+
+    public ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, _index);
+
+    public void Advance(int count)
+    {
+        if (_buffer is null) throw new ObjectDisposedException(nameof(PooledByteBufferWriter));
+        if (count < 0 || _index + count > _buffer.Length)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        _index += count;
+    }
+
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        CheckAndResize(sizeHint);
+        return _buffer.AsMemory(_index);
+    }
+
+    public Span<byte> GetSpan(int sizeHint = 0)
+    {
+        CheckAndResize(sizeHint);
+        return _buffer.AsSpan(_index);
+    }
+
+    public void Reset() => _index = 0;
+
+    public void Dispose()
+    {
+        if (_buffer is not null)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = null;
+        }
+    }
+
+    private void CheckAndResize(int sizeHint)
+    {
+        if (_buffer is null) throw new ObjectDisposedException(nameof(PooledByteBufferWriter));
+        if (sizeHint < 0) sizeHint = 0;
+        int available = _buffer.Length - _index;
+        if (sizeHint <= available) return;
+
+        int grow = Math.Max(_buffer.Length * 2, _index + Math.Max(sizeHint, 256));
+        byte[] next = ArrayPool<byte>.Shared.Rent(grow);
+        _buffer.AsSpan(0, _index).CopyTo(next);
+        ArrayPool<byte>.Shared.Return(_buffer);
+        _buffer = next;
+    }
+}

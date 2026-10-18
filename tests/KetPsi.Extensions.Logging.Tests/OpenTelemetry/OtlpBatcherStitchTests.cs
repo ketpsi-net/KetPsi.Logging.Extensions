@@ -20,6 +20,15 @@ public class OtlpBatcherTests
         0x0A, 0x05, 0x68, 0x65, 0x6C, 0x6C, 0x6F // minimal non-empty resource blob
     ];
 
+    private static readonly byte[] TestScope = CreateTestScope();
+
+    private static byte[] CreateTestScope()
+    {
+        using var client = new HttpClient(new NoopHttpMessageHandler()) { BaseAddress = new Uri("http://127.0.0.1") };
+        var batcher = new OtlpBatcher(client, 4, DummyResource);
+        return batcher.GetOrCreateScopeBytes("Test");
+    }
+
     // ------------------------------------------------------------------
     // HTTP helpers
     // ------------------------------------------------------------------
@@ -124,8 +133,8 @@ public class OtlpBatcherTests
     {
         await using var batcher = CreateBatcher(CreateNoopClient());
 
-        int a = batcher.CalculateTotalRequestSize(batchLength);
-        int b = batcher.CalculateTotalRequestSize(batchLength);
+        int a = batcher.CalculateTotalRequestSize(batchLength, TestScope.Length);
+        int b = batcher.CalculateTotalRequestSize(batchLength, TestScope.Length);
 
         Assert.Equal(a, b);
         Assert.True(a > DummyResource.Length);
@@ -136,9 +145,9 @@ public class OtlpBatcherTests
     {
         await using var batcher = CreateBatcher(CreateNoopClient());
 
-        int s0 = batcher.CalculateTotalRequestSize(0);
-        int s1 = batcher.CalculateTotalRequestSize(200);
-        int s2 = batcher.CalculateTotalRequestSize(2000);
+        int s0 = batcher.CalculateTotalRequestSize(0, TestScope.Length);
+        int s1 = batcher.CalculateTotalRequestSize(200, TestScope.Length);
+        int s2 = batcher.CalculateTotalRequestSize(2000, TestScope.Length);
 
         Assert.True(s1 > s0);
         Assert.True(s2 > s1);
@@ -157,10 +166,10 @@ public class OtlpBatcherTests
         byte[] batch = new byte[batchLength];
         if (batchLength > 0) Random.Shared.NextBytes(batch);
 
-        int expected = batcher.CalculateTotalRequestSize(batchLength);
+        int expected = batcher.CalculateTotalRequestSize(batchLength, TestScope.Length);
         byte[] network = new byte[expected + 32];
 
-        int written = batcher.StitchNetworkPayload(batch, batchLength, network);
+        int written = batcher.StitchNetworkPayload(new OtlpBatcher.BatchPayload(batch, batchLength, TestScope), network);
 
         Assert.Equal(expected, written);
     }
@@ -171,10 +180,10 @@ public class OtlpBatcherTests
         await using var batcher = CreateBatcher(CreateNoopClient());
 
         byte[] batch = [0xDE, 0xAD, 0xBE, 0xEF];
-        int size = batcher.CalculateTotalRequestSize(batch.Length);
+        int size = batcher.CalculateTotalRequestSize(batch.Length, TestScope.Length);
         byte[] network = new byte[size];
 
-        int written = batcher.StitchNetworkPayload(batch, batch.Length, network);
+        int written = batcher.StitchNetworkPayload(new OtlpBatcher.BatchPayload(batch, batch.Length, TestScope), network);
         var payload = network.AsSpan(0, written);
 
         Assert.Equal(0x0A, payload[0]); // resource_logs tag
@@ -187,9 +196,9 @@ public class OtlpBatcherTests
     {
         await using var batcher = CreateBatcher(CreateNoopClient());
 
-        int size = batcher.CalculateTotalRequestSize(0);
+        int size = batcher.CalculateTotalRequestSize(0, TestScope.Length);
         byte[] network = new byte[size];
-        int written = batcher.StitchNetworkPayload([], 0, network);
+        int written = batcher.StitchNetworkPayload(new OtlpBatcher.BatchPayload([], 0, TestScope), network);
 
         Assert.Equal(size, written);
         Assert.Equal(0x0A, network[0]);
@@ -205,7 +214,7 @@ public class OtlpBatcherTests
     {
         await using var batcher = CreateBatcher(CreateNoopClient());
 
-        Span<byte> slice = batcher.Reserve(48, out BufferState state);
+        Span<byte> slice = batcher.Reserve(48, TestScope, out BufferState state);
         Assert.Equal(48, slice.Length);
         Assert.Equal(48, state.BytesWritten);
         Assert.Equal(1, Volatile.Read(ref state.PendingWriters));
@@ -219,10 +228,10 @@ public class OtlpBatcherTests
     {
         await using var batcher = CreateBatcher(CreateNoopClient());
 
-        batcher.Reserve(10, out var s1);
+        batcher.Reserve(10, TestScope, out var s1);
         batcher.Commit(s1);
 
-        batcher.Reserve(20, out var s2);
+        batcher.Reserve(20, TestScope, out var s2);
         Assert.Same(s1.Array, s2.Array);
         Assert.Equal(30, s2.BytesWritten);
         batcher.Commit(s2);
@@ -234,10 +243,10 @@ public class OtlpBatcherTests
         await using var batcher = CreateBatcher(CreateNoopClient());
 
         const int almostFull = 65536 - 8;
-        batcher.Reserve(almostFull, out var oldState);
+        batcher.Reserve(almostFull, TestScope, out var oldState);
         batcher.Commit(oldState);
 
-        batcher.Reserve(64, out var newState);
+        batcher.Reserve(64, TestScope, out var newState);
 
         Assert.True(oldState.IsRetired);
         Assert.NotSame(oldState.Array, newState.Array);
@@ -256,7 +265,7 @@ public class OtlpBatcherTests
         await using var batcher = CreateBatcher(client);
 
         // Hold a reservation open
-        Span<byte> held = batcher.Reserve(32, out BufferState heldState);
+        Span<byte> held = batcher.Reserve(32, TestScope, out BufferState heldState);
         held.Fill(0x42);
         // do NOT commit yet
 
@@ -285,7 +294,7 @@ public class OtlpBatcherTests
         var (client, posts, signal) = CreateCapturingClient();
         await using var batcher = CreateBatcher(client);
 
-        Span<byte> slice = batcher.Reserve(8, out var state);
+        Span<byte> slice = batcher.Reserve(8, TestScope, out var state);
         slice.Fill(0xAB);
         batcher.Commit(state);
 
@@ -318,11 +327,11 @@ public class OtlpBatcherTests
         await using var batcher = CreateBatcher(client);
 
         const int recordSize = 24;
-        Span<byte> slice = batcher.Reserve(recordSize, out var state);
+        Span<byte> slice = batcher.Reserve(recordSize, TestScope, out var state);
         slice.Fill(0x11);
         batcher.Commit(state);
 
-        int expectedNetworkSize = batcher.CalculateTotalRequestSize(recordSize);
+        int expectedNetworkSize = batcher.CalculateTotalRequestSize(recordSize, TestScope.Length);
 
         batcher.Flush();
         await WaitForPostAsync(signal);
@@ -362,13 +371,13 @@ public class OtlpBatcherTests
         await using var batcher = CreateBatcher(client);
 
         // First batch – will fail inside worker
-        batcher.Reserve(4, out var s1);
+        batcher.Reserve(4, TestScope, out var s1);
         batcher.Commit(s1);
         batcher.Flush();
         await Task.Delay(300); // allow failed attempt
 
         // Second batch – must still be processed
-        batcher.Reserve(4, out var s2);
+        batcher.Reserve(4, TestScope, out var s2);
         batcher.Commit(s2);
         batcher.Flush();
 
@@ -403,7 +412,7 @@ public class OtlpBatcherTests
             {
                 for (int i = 0; i < iterations; i++)
                 {
-                    Span<byte> slice = batcher.Reserve(payloadSize, out BufferState state);
+                    Span<byte> slice = batcher.Reserve(payloadSize, TestScope, out BufferState state);
                     slice.Fill((byte)(i & 0xFF));
                     batcher.Commit(state);
                 }
@@ -426,7 +435,7 @@ public class OtlpBatcherTests
     {
         var batcher = CreateBatcher(CreateNoopClient());
 
-        batcher.Reserve(16, out var state);
+        batcher.Reserve(16, TestScope, out var state);
         batcher.Commit(state);
         batcher.Flush();
 
@@ -446,7 +455,7 @@ public class OtlpBatcherTests
             {
                 try
                 {
-                    Span<byte> s = batcher.Reserve(16, out var state);
+                    Span<byte> s = batcher.Reserve(16, TestScope, out var state);
                     s.Clear();
                     batcher.Commit(state);
                 }

@@ -30,6 +30,11 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
 
                 var otlpOptions = new ZeroAllocOtlpOptionsBuilder();
                 options?.Invoke(otlpOptions);
+
+                // Merge resources bound from Logging:OpenTelemetry:Resources (appsettings)
+                if (opt.Resources is { Count: > 0 })
+                    otlpOptions.ConfigureResource(opt.Resources);
+
                 var otlp = otlpOptions.Build();
 
                 // Spin up an isolated HTTP pipeline. 
