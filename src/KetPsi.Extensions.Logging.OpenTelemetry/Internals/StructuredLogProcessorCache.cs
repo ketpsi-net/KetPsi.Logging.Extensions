@@ -9,7 +9,7 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry.Internals;
 // 1. The Generic Delegate Cache
 internal static class StructuredLogProcessorCache<TState>
 {
-    public delegate void ProcessDelegate(ZeroAllocOtlpLogger logger, LogLevel level, ref TState state, Exception? exception);
+    public delegate void ProcessDelegate(ZeroAllocOtlpLogger logger, LogLevel level, EventId eventId, ref TState state, Exception? exception);
 
     public static readonly ProcessDelegate? Process;
 

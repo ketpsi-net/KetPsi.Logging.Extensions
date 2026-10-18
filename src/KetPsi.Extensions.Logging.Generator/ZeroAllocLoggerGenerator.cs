@@ -257,11 +257,12 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
             string valueExpr = $"__{arg.Name}";
             string formatArg = arg.Format != null ? $"\"{arg.Format}\"" : "null";
 
-            if (arg.Format == "json")
+            if (arg.Format == "json" || arg.Format == "json:indexed")
             {
                 if (jsonContext != null) valueExpr = $"new JsonLogValue<{arg.TypeName}>({valueExpr}, (System.Text.Json.Serialization.Metadata.JsonTypeInfo<{arg.TypeName}>){jsonContext}.Default.GetTypeInfo(typeof({arg.TypeName})))";
                 else valueExpr = $"new JsonLogValue<{arg.TypeName}>({valueExpr}, null)";
-                formatArg = "null";
+                // Keep format so sinks can distinguish json vs json:indexed
+                formatArg = arg.Format == "json:indexed" ? "\"json:indexed\"" : "\"json\"";
             }
             else if (arg.Format != null && arg.Format.StartsWith("mask"))
             {
@@ -311,7 +312,7 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
 
     private static string GetWrapperType(LogPart arg)
     {
-        if (arg.Format == "json") return $"JsonLogValue<{arg.TypeName}>";
+        if (arg.Format == "json" || arg.Format == "json:indexed") return $"JsonLogValue<{arg.TypeName}>";
         if (arg.Format != null && arg.Format.StartsWith("mask")) return $"MaskedSpanFormattable<{arg.TypeName}>";
         return arg.TypeName;
     }

@@ -24,6 +24,10 @@ public sealed class OtlpResourceBuilder : IDisposable
         if (_rentedBuffer == null)
             throw new ObjectDisposedException(nameof(OtlpResourceBuilder));
 
+        // Empty keys become resource.attributes[""] — invalid for Elasticsearch.
+        if (string.IsNullOrWhiteSpace(key))
+            return this;
+
         ReadOnlySpan<char> nameSpan = key.AsSpan();
         Type type = typeof(T);
         int size;
@@ -116,22 +120,21 @@ public sealed class OtlpResourceBuilder : IDisposable
     /// <summary>
     /// Returns ONLY the raw attributes (repeated KeyValue).
     /// Do NOT wrap with Tag(1,2) here – that is done later in StitchNetworkPayload.
+    /// The sequence of tagged KeyValue messages is the complete encoding of a Resource
+    /// that contains only attributes.
     /// </summary>
     public byte[] Build()
     {
         int attributesPayloadSize = _offset;
 
-        // Build Resource Message (Field 1)
-        int headerSize = 1 + ProtobufMath.GetVarIntSize((ulong)attributesPayloadSize);
-        ResourceBytes = new byte[headerSize + attributesPayloadSize];
-        var writer = new ZeroAllocProtobufWriter(ResourceBytes);
+        ResourceBytes = new byte[attributesPayloadSize];
+        if (attributesPayloadSize > 0)
+        {
+            _rentedBuffer!.AsSpan(0, _offset).CopyTo(ResourceBytes);
+        }
 
-        writer.WriteTag(1, 2);
-        writer.WriteVarInt((ulong)attributesPayloadSize);
-
-        _rentedBuffer.AsSpan(0, _offset).CopyTo(ResourceBytes.AsSpan(writer.BytesWritten));
-
-        System.Buffers.ArrayPool<byte>.Shared.Return(_rentedBuffer);
+        ArrayPool<byte>.Shared.Return(_rentedBuffer!);
+        _rentedBuffer = null;
         return ResourceBytes;
     }
 

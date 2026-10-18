@@ -11,6 +11,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly ZeroAllocOtlpLoggerProvider _provider;
+    private readonly byte[] _scopeBytes;
 
     public OtlpBatcher Batcher => _provider.Batcher;
     public string CategoryName => _categoryName;
@@ -19,6 +20,8 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
     {
         _categoryName = categoryName;
         _provider = provider;
+        // scope.name = logger category (matches standard OTEL / Microsoft exporter)
+        _scopeBytes = provider.Batcher.GetOrCreateScopeBytes(categoryName);
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
@@ -39,18 +42,19 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
 
         if (StructuredLogProcessorCache<TState>.Process != null)
         {
-            StructuredLogProcessorCache<TState>.Process(this, logLevel, ref state, exception);
+            StructuredLogProcessorCache<TState>.Process(this, logLevel, eventId, ref state, exception);
             return;
         }
 
-        ProcessFallback(logLevel, state, exception, formatter);
+        ProcessFallback(logLevel, eventId, state, exception, formatter);
     }
 
     internal unsafe void ProcessStructured<TStructuredState>(
         LogLevel logLevel,
+        EventId eventId,
         ref TStructuredState structuredState,
         Exception? exception)
-        where TStructuredState : IStructuredLogState
+        where TStructuredState : IStructuredLogState, IDeferredUtf8Formatter
     {
         long timeUnixNano = (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
         int severityNumber = MapLogLevelToOtlpSeverity(logLevel);
@@ -69,15 +73,38 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
             Activity.Current.SpanId.CopyTo(spanId);
         }
 
+        PooledByteBufferWriter? bodyWriter = null;
         try
         {
             var sizeCalculator = new OtlpParameterSizeCalculator();
             structuredState.WriteParameters(ref sizeCalculator);
 
-            ReadOnlySpan<char> body = structuredState.OriginalFormat;
+            // Render body via zero-alloc UTF-8 path (generated states implement IDeferredUtf8Formatter).
+            bodyWriter = new PooledByteBufferWriter(256);
+            structuredState.FormatTo(bodyWriter);
+            ReadOnlySpan<byte> bodyUtf8 = bodyWriter.WrittenSpan;
 
-            int internalSize = OtlpLogRecordFormatter.CalculateLogRecordSize(
-                timeUnixNano, severityNumber, severityText, body, sizeCalculator.TotalSize, traceId, spanId);
+            // Standard enrichment attributes (category, event, exception, original format template)
+            int enrichmentSize = 0;
+            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("logger".AsSpan(), _categoryName.AsSpan(), 6);
+            // Keep the message template under the conventional .NET key
+            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}".AsSpan(), structuredState.OriginalFormat, 6);
+            if (eventId.Id != 0)
+                enrichmentSize += OtlpAttributeFormatter.CalculateInt64Size("event.id".AsSpan(), eventId.Id, 6);
+            if (!string.IsNullOrEmpty(eventId.Name))
+                enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("event.name".AsSpan(), eventId.Name.AsSpan(), 6);
+            if (exception is not null)
+            {
+                enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("exception.type".AsSpan(), (exception.GetType().FullName ?? exception.GetType().Name).AsSpan(), 6);
+                enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("exception.message".AsSpan(), (exception.Message ?? string.Empty).AsSpan(), 6);
+            }
+
+            int scopeSize = CalculateScopeAttributesSize();
+            int attributesSize = sizeCalculator.TotalSize + enrichmentSize + scopeSize;
+
+            string? eventName = eventId.Name;
+            int internalSize = OtlpLogRecordFormatter.CalculateLogRecordSizeUtf8Body(
+                timeUnixNano, severityNumber, severityText, bodyUtf8.Length, attributesSize, traceId, spanId, eventName);
 
             int lengthBytes = 1;
             ulong uSize = (ulong)internalSize;
@@ -88,7 +115,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
             }
             int recordSize = 1 + lengthBytes + internalSize;
 
-            Span<byte> reservedSpan = Batcher.Reserve(recordSize, out BufferState bufferState);
+            Span<byte> reservedSpan = Batcher.Reserve(recordSize, _scopeBytes, out BufferState bufferState);
 
             try
             {
@@ -97,15 +124,40 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
                 writer.WriteTag(2, 2);
                 writer.WriteVarInt((ulong)internalSize);
 
-                OtlpLogRecordFormatter.WriteLogRecord(
-                    ref writer, timeUnixNano, severityNumber, severityText, body, traceId, spanId);
+                OtlpLogRecordFormatter.WriteLogRecordUtf8Body(
+                    ref writer, timeUnixNano, severityNumber, severityText, bodyUtf8, traceId, spanId, eventName);
 
+                // Enrichment attributes first (advances writer.BytesWritten)
+                OtlpAttributeFormatter.WriteString(ref writer, "logger".AsSpan(), _categoryName.AsSpan(), 6);
+                OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}".AsSpan(), structuredState.OriginalFormat, 6);
+                if (eventId.Id != 0)
+                    OtlpAttributeFormatter.WriteInt64(ref writer, "event.id".AsSpan(), eventId.Id, 6);
+                if (!string.IsNullOrEmpty(eventId.Name))
+                    OtlpAttributeFormatter.WriteString(ref writer, "event.name".AsSpan(), eventId.Name.AsSpan(), 6);
+                if (exception is not null)
+                {
+                    OtlpAttributeFormatter.WriteString(ref writer, "exception.type".AsSpan(), (exception.GetType().FullName ?? exception.GetType().Name).AsSpan(), 6);
+                    OtlpAttributeFormatter.WriteString(ref writer, "exception.message".AsSpan(), (exception.Message ?? string.Empty).AsSpan(), 6);
+                }
+
+                // Structured parameters (field 6) written directly after enrichment
+                int attrOffset = writer.BytesWritten;
                 if (sizeCalculator.TotalSize > 0)
                 {
                     fixed (byte* ptr = reservedSpan)
                     {
-                        var encoder = new OtlpParameterEncoder(ptr, writer.BytesWritten, reservedSpan.Length);
+                        var encoder = new OtlpParameterEncoder(ptr, attrOffset, reservedSpan.Length);
                         structuredState.WriteParameters(ref encoder);
+                    }
+                    attrOffset += sizeCalculator.TotalSize;
+                }
+
+                // Active scopes (StartScope / BeginScope) — last so we need not advance writer
+                if (scopeSize > 0)
+                {
+                    fixed (byte* ptr = reservedSpan)
+                    {
+                        WriteScopeAttributes(ptr, attrOffset, reservedSpan.Length);
                     }
                 }
             }
@@ -116,6 +168,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         }
         finally
         {
+            bodyWriter?.Dispose();
             if (pooledIds != null)
             {
                 ArrayPool<byte>.Shared.Return(pooledIds);
@@ -125,6 +178,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
 
     private unsafe void ProcessFallback<TState>(
         LogLevel logLevel,
+        EventId eventId,
         TState state,
         Exception? exception,
         Func<TState, Exception?, string> formatter)
@@ -167,8 +221,32 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
             }
         }
 
-        string bodyString = originalFormat ?? formatter(state, exception);
+        // Enrichment attributes
+        fallbackAttributesSize += OtlpAttributeFormatter.CalculateStringSize("logger".AsSpan(), _categoryName.AsSpan(), 6);
+        if (eventId.Id != 0)
+            fallbackAttributesSize += OtlpAttributeFormatter.CalculateInt64Size("event.id".AsSpan(), eventId.Id, 6);
+        if (!string.IsNullOrEmpty(eventId.Name))
+            fallbackAttributesSize += OtlpAttributeFormatter.CalculateStringSize("event.name".AsSpan(), eventId.Name.AsSpan(), 6);
+        if (exception is not null)
+        {
+            fallbackAttributesSize += OtlpAttributeFormatter.CalculateStringSize("exception.type".AsSpan(), (exception.GetType().FullName ?? exception.GetType().Name).AsSpan(), 6);
+            fallbackAttributesSize += OtlpAttributeFormatter.CalculateStringSize("exception.message".AsSpan(), (exception.Message ?? string.Empty).AsSpan(), 6);
+        }
+
+        int scopeSize = CalculateScopeAttributesSize();
+        fallbackAttributesSize += scopeSize;
+
+        // Prefer the rendered message for body; keep template available via attributes / originalFormat.
+        string bodyString = formatter(state, exception);
+        if (string.IsNullOrEmpty(bodyString))
+            bodyString = originalFormat ?? string.Empty;
         if (string.IsNullOrEmpty(bodyString) && exception is null) return;
+
+        // If we have a template distinct from the rendered body, ensure it is exported as {OriginalFormat}.
+        if (!string.IsNullOrEmpty(originalFormat) && !string.Equals(originalFormat, bodyString, StringComparison.Ordinal))
+        {
+            fallbackAttributesSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}".AsSpan(), originalFormat.AsSpan(), 6);
+        }
 
         long timeUnixNano = (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
         int severityNumber = MapLogLevelToOtlpSeverity(logLevel);
@@ -190,15 +268,16 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         {
             ReadOnlySpan<char> body = bodyString.AsSpan();
 
+            string? eventName = eventId.Name;
             int internalSize = OtlpLogRecordFormatter.CalculateLogRecordSize(
-                timeUnixNano, severityNumber, severityText, body, fallbackAttributesSize, traceId, spanId);
+                timeUnixNano, severityNumber, severityText, body, fallbackAttributesSize, traceId, spanId, eventName);
 
             int lengthBytes = 1;
             ulong uSize = (ulong)internalSize;
             while (uSize >= 128) { lengthBytes++; uSize >>= 7; }
 
             int recordSize = 1 + lengthBytes + internalSize;
-            Span<byte> reservedSpan = Batcher.Reserve(recordSize, out BufferState bufferState);
+            Span<byte> reservedSpan = Batcher.Reserve(recordSize, _scopeBytes, out BufferState bufferState);
 
             try
             {
@@ -207,10 +286,10 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
                 writer.WriteVarInt((ulong)internalSize);
 
                 OtlpLogRecordFormatter.WriteLogRecord(
-                    ref writer, timeUnixNano, severityNumber, severityText, body, traceId, spanId);
+                    ref writer, timeUnixNano, severityNumber, severityText, body, traceId, spanId, eventName);
 
-                // Write Attributes
-                if (stateParams != null && fallbackAttributesSize > 0)
+                // Write state attributes
+                if (stateParams != null)
                 {
                     for (int i = 0; i < stateParams.Count; i++)
                     {
@@ -242,6 +321,29 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
                         writer.WriteString(1, strVal.AsSpan());
                     }
                 }
+
+                // Enrichment attributes
+                OtlpAttributeFormatter.WriteString(ref writer, "logger".AsSpan(), _categoryName.AsSpan(), 6);
+                if (!string.IsNullOrEmpty(originalFormat) && !string.Equals(originalFormat, bodyString, StringComparison.Ordinal))
+                    OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}".AsSpan(), originalFormat.AsSpan(), 6);
+                if (eventId.Id != 0)
+                    OtlpAttributeFormatter.WriteInt64(ref writer, "event.id".AsSpan(), eventId.Id, 6);
+                if (!string.IsNullOrEmpty(eventId.Name))
+                    OtlpAttributeFormatter.WriteString(ref writer, "event.name".AsSpan(), eventId.Name.AsSpan(), 6);
+                if (exception is not null)
+                {
+                    OtlpAttributeFormatter.WriteString(ref writer, "exception.type".AsSpan(), (exception.GetType().FullName ?? exception.GetType().Name).AsSpan(), 6);
+                    OtlpAttributeFormatter.WriteString(ref writer, "exception.message".AsSpan(), (exception.Message ?? string.Empty).AsSpan(), 6);
+                }
+
+                // Active scopes (StartScope / BeginScope)
+                if (scopeSize > 0)
+                {
+                    fixed (byte* ptr = reservedSpan)
+                    {
+                        WriteScopeAttributes(ptr, writer.BytesWritten, reservedSpan.Length);
+                    }
+                }
             }
             finally
             {
@@ -252,6 +354,127 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         {
             if (pooledIds != null) System.Buffers.ArrayPool<byte>.Shared.Return(pooledIds);
         }
+    }
+
+
+    /// <summary>
+    /// Accumulates the protobuf size of all active scope attributes (field 6 KeyValues).
+    /// </summary>
+    private int CalculateScopeAttributesSize()
+    {
+        var scopeProvider = _provider.ScopeProvider;
+        if (scopeProvider is null) return 0;
+
+        var holder = new SizeHolder();
+        scopeProvider.ForEachScope(static (scope, h) =>
+        {
+            h.Total += MeasureScope(scope);
+        }, holder);
+        return holder.Total;
+    }
+
+    private static int MeasureScope(object? scope)
+    {
+        if (scope is null) return 0;
+
+        if (scope is IStructuredLogState structured)
+        {
+            var calc = new OtlpParameterSizeCalculator();
+            structured.WriteParameters(ref calc);
+            return calc.TotalSize;
+        }
+
+        if (scope is System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string, object?>> kvs)
+        {
+            int size = 0;
+            foreach (var kvp in kvs)
+            {
+                if (kvp.Key == "{OriginalFormat}") continue;
+                string strVal = kvp.Value?.ToString() ?? string.Empty;
+                size += OtlpAttributeFormatter.CalculateStringSize(kvp.Key.AsSpan(), strVal.AsSpan(), 6);
+            }
+            return size;
+        }
+
+        if (scope is string s)
+            return OtlpAttributeFormatter.CalculateStringSize("scope".AsSpan(), s.AsSpan(), 6);
+
+        string fallback = scope.ToString() ?? string.Empty;
+        if (fallback.Length == 0) return 0;
+        return OtlpAttributeFormatter.CalculateStringSize("scope".AsSpan(), fallback.AsSpan(), 6);
+    }
+
+    /// <summary>
+    /// Writes all active scope attributes into the buffer starting at <paramref name="offset"/>.
+    /// Returns the number of bytes written. Intended to be the last attribute write so the
+    /// outer ZeroAllocProtobufWriter does not need its BytesWritten advanced.
+    /// </summary>
+    private unsafe int WriteScopeAttributes(byte* bufferBase, int offset, int bufferLength)
+    {
+        var scopeProvider = _provider.ScopeProvider;
+        if (scopeProvider is null) return 0;
+
+        var ctx = new ScopeWriteContext
+        {
+            BufferBase = bufferBase,
+            BufferLength = bufferLength,
+            Offset = offset
+        };
+        int start = offset;
+
+        scopeProvider.ForEachScope(static (scope, c) =>
+        {
+            if (scope is null) return;
+
+            if (scope is IStructuredLogState structured)
+            {
+                var encoder = new OtlpParameterEncoder(c.BufferBase, c.Offset, c.BufferLength);
+                structured.WriteParameters(ref encoder);
+                var calc = new OtlpParameterSizeCalculator();
+                structured.WriteParameters(ref calc);
+                c.Offset += calc.TotalSize;
+                return;
+            }
+
+            Span<byte> span = new Span<byte>(c.BufferBase + c.Offset, c.BufferLength - c.Offset);
+            var w = new ZeroAllocProtobufWriter(span);
+
+            if (scope is System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<string, object?>> kvs)
+            {
+                foreach (var kvp in kvs)
+                {
+                    if (kvp.Key == "{OriginalFormat}") continue;
+                    string strVal = kvp.Value?.ToString() ?? string.Empty;
+                    OtlpAttributeFormatter.WriteString(ref w, kvp.Key.AsSpan(), strVal.AsSpan(), 6);
+                }
+            }
+            else if (scope is string s)
+            {
+                OtlpAttributeFormatter.WriteString(ref w, "scope".AsSpan(), s.AsSpan(), 6);
+            }
+            else
+            {
+                string fallback = scope.ToString() ?? string.Empty;
+                if (fallback.Length > 0)
+                    OtlpAttributeFormatter.WriteString(ref w, "scope".AsSpan(), fallback.AsSpan(), 6);
+            }
+
+            c.Offset += w.BytesWritten;
+        }, ctx);
+
+        return ctx.Offset - start;
+    }
+
+    private sealed class SizeHolder
+    {
+        public int Total;
+    }
+
+    private sealed class ScopeWriteContext
+    {
+        public unsafe byte* BufferBase;
+        public int BufferLength;
+        public int Offset;
     }
 
     internal static int MapLogLevelToOtlpSeverity(LogLevel logLevel) => logLevel switch

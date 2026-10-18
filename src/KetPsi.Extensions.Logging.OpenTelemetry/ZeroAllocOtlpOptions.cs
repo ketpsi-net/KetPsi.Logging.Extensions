@@ -1,4 +1,4 @@
-﻿namespace KetPsi.Extensions.Logging.OpenTelemetry
+namespace KetPsi.Extensions.Logging.OpenTelemetry
 {
     public interface IZeroAllocOtlpOptionsBuilder
     {
@@ -12,12 +12,19 @@
     {
         private ZeroAllocOtlpOptions _options = new();
         private Dictionary<string, string> _resources = new();
-        private void AddResource(string key, string value)
+
+        private void AddResource(string key, string? value)
         {
+            // Empty keys become resource.attributes[""] which Elasticsearch rejects.
+            if (string.IsNullOrWhiteSpace(key))
+                return;
+
             if (_resources.ContainsKey(key))
                 return;
-            _resources.Add(key, value);
+
+            _resources.Add(key, value ?? string.Empty);
         }
+
         private void AddDefaultResources()
         {
             AddResource("telemetry.sdk.name", "opentelemetry");
@@ -28,6 +35,9 @@
 
         public IZeroAllocOtlpOptionsBuilder ConfigureResource(Dictionary<string, string> resources)
         {
+            if (resources is null)
+                return this;
+
             foreach (var kv in resources)
             {
                 AddResource(kv.Key, kv.Value);
@@ -50,7 +60,7 @@
         internal ZeroAllocOtlpOptions Build()
         {
             AddDefaultResources();
-            var otlpResourceBuilder = new OtlpResourceBuilder(_resources.Count);
+            var otlpResourceBuilder = new OtlpResourceBuilder(Math.Max(4096, _resources.Count * 64));
             foreach (var item in _resources)
             {
                 otlpResourceBuilder.AddAttribute(item.Key, item.Value);
@@ -68,6 +78,4 @@
 
         public byte[] Resources { get; set; } = [];
     }
-
-
 }
