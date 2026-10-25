@@ -88,11 +88,7 @@ internal sealed class SimpleConsoleFormatter : IZeroAllocConsoleFormatter, IDisp
         }
 
         // 7. The actual Message
-        if (LogStateFormatterCache<TState>.Format != null)
-        {
-            LogStateFormatterCache<TState>.Format(state, buffer);
-        }
-        else
+        if (!StructuredLogStateDispatcher.TryFormatTo(ref state, buffer))
         {
             WriteString(buffer, formatter(state, exception));
         }
@@ -189,29 +185,3 @@ internal sealed class SimpleConsoleFormatter : IZeroAllocConsoleFormatter, IDisp
         _optionsReloadToken?.Dispose();
     }
 }
-
-internal static class LogStateFormatterCache<TState>
-{
-    public static readonly Action<TState, IBufferWriter<byte>>? Format;
-
-    static LogStateFormatterCache()
-    {
-        // 1. Check if the type implements our formatter without casting it
-        if (typeof(IDeferredUtf8Formatter).IsAssignableFrom(typeof(TState)))
-        {
-            // 2. Create a closed generic delegate to the constrained method below
-            var method = typeof(LogStateFormatterCache<TState>)
-                .GetMethod(nameof(FormatInternal), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                .MakeGenericMethod(typeof(TState));
-
-            Format = (Action<TState, IBufferWriter<byte>>)Delegate.CreateDelegate(typeof(Action<TState, IBufferWriter<byte>>), method);
-        }
-    }
-
-    // Because this method is constrained (where T : ...), calling FormatTo does NOT box the struct!
-    private static void FormatInternal<T>(T state, IBufferWriter<byte> writer) where T : IDeferredUtf8Formatter
-    {
-        state.FormatTo(writer);
-    }
-}
-
