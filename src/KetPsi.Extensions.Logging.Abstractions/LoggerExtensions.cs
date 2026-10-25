@@ -14,9 +14,10 @@ namespace Microsoft.Extensions.Logging
     /// <list type="bullet">
     /// <item><description><c>{value:@name}</c> : Overrides the structured log property name.</description></item>
     /// <item><description><c>{value:format}</c> : Applies standard C# string formatting (e.g., <c>C2</c>, <c>yyyy-MM-dd</c>).</description></item>
-    /// <item><description><c>{value:@name:length}</c> : Overrides the property name and sets alignment/length.</description></item>
-    /// <item><description><c>{value:@name:format:length}</c> : Overrides the property name, applies standard format, and alignment.</description></item>
-    /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and replaces the entire value with <c>***</c>.</description></item>
+    /// <item><description><c>{value,10:@name}</c> : Pads the rendered value to 10 characters (negative values left-align).</description></item>
+    /// <item><description><c>{value:@name:json}</c> / <c>{value:@name:json:indexed}</c> : Serializes the value as JSON.</description></item>
+    /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
+    /// <item><description><c>{value:@name:mask:4..8}</c> : Masks the characters in the given range (C# <see cref="Range"/> syntax).</description></item>
     /// <item><description><c>{value:@name:mask:4}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
     /// <item><description><c>{value:@name:format:mask:4}</c> : Combines property name override, standard formatting, and partial masking.</description></item>
     /// </list>
@@ -346,9 +347,10 @@ namespace Microsoft.Extensions.Logging
         /// <list type="bullet">
         /// <item><description><c>{value:@name}</c> : Overrides the structured log property name.</description></item>
         /// <item><description><c>{value:format}</c> : Applies standard C# string formatting (e.g., <c>C2</c>, <c>yyyy-MM-dd</c>).</description></item>
-        /// <item><description><c>{value:@name:length}</c> : Overrides the property name and sets alignment/length.</description></item>
-        /// <item><description><c>{value:@name:format:length}</c> : Overrides the property name, applies standard format, and alignment.</description></item>
-        /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and replaces the entire value with <c>***</c>.</description></item>
+        /// <item><description><c>{value,10:@name}</c> : Pads the rendered value to 10 characters (negative values left-align).</description></item>
+        /// <item><description><c>{value:@name:json}</c> / <c>{value:@name:json:indexed}</c> : Serializes the value as JSON.</description></item>
+        /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
+        /// <item><description><c>{value:@name:mask:4..8}</c> : Masks the characters in the given range (C# <see cref="Range"/> syntax).</description></item>
         /// <item><description><c>{value:@name:mask:4}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
         /// <item><description><c>{value:@name:format:mask:4}</c> : Combines property name override, standard formatting, and partial masking.</description></item>
         /// </list>
