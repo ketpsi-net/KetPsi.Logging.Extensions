@@ -9,41 +9,61 @@ public readonly struct LogParameter<T>(string? name, T value, string? format = n
     public readonly T Value = value;
     public readonly string? Format = format;
 
-    public void FormatTo(IBufferWriter<byte> writer)
+    /// <summary>The name pre-encoded as UTF-8 (set by generated code) so sinks never transcode it per log.</summary>
+    public readonly byte[]? NameUtf8;
+
+    public LogParameter(string? name, byte[]? nameUtf8, T value, string? format = null)
+        : this(name, value, format)
     {
-        if (LogParameterResolver<T>.Utf8Formatter != null)
+        NameUtf8 = nameUtf8;
+    }
+
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? t_alignBuffer;
+
+    public void FormatTo(IBufferWriter<byte> writer) => LogValueFormatter.FormatTo(in Value, writer, Format);
+
+    /// <summary>
+    /// Writes the value padded to <paramref name="alignment"/> characters, following composite-format rules:
+    /// positive values right-align, negative values left-align.
+    /// </summary>
+    public void FormatTo(IBufferWriter<byte> writer, int alignment)
+    {
+        if (alignment == 0)
         {
-            Span<byte> destination = writer.GetSpan(256);
-            if (LogParameterResolver<T>.Utf8Formatter(Value, destination, out int bytesWritten, Format, null))
-            {
-                writer.Advance(bytesWritten);
-                return;
-            }
+            FormatTo(writer);
+            return;
         }
 
-        if (LogParameterResolver<T>.CharFormatter != null)
+        // Format into a thread-local scratch buffer first so the padding can be measured.
+        // Taking ownership (nulling the slot) keeps nested aligned formatting re-entrant.
+        var scratch = t_alignBuffer ?? new ArrayBufferWriter<byte>(256);
+        t_alignBuffer = null;
+        try
         {
-            Span<char> charDest = stackalloc char[256];
-            if (LogParameterResolver<T>.CharFormatter(Value, charDest, out int charsWritten, Format, null))
-            {
-                int maxBytes = Encoding.UTF8.GetMaxByteCount(charsWritten);
-                int bytesWritten = Encoding.UTF8.GetBytes(charDest[..charsWritten], writer.GetSpan(maxBytes));
-                writer.Advance(bytesWritten);
-                return;
-            }
-        }
+            scratch.Clear();
+            FormatTo(scratch);
 
-        // 3. String / Object Fallback
-        string stringValue = Value?.ToString() ?? string.Empty;
-        if (!string.IsNullOrEmpty(stringValue))
+            ReadOnlySpan<byte> formatted = scratch.WrittenSpan;
+            int padding = Math.Abs(alignment) - Encoding.UTF8.GetCharCount(formatted);
+
+            if (alignment > 0) WritePadding(writer, padding);
+            writer.Write(formatted);
+            if (alignment < 0) WritePadding(writer, padding);
+        }
+        finally
         {
-            int maxBytes = Encoding.UTF8.GetMaxByteCount(stringValue.Length);
-            int bytesWritten = Encoding.UTF8.GetBytes(stringValue, writer.GetSpan(maxBytes));
-            writer.Advance(bytesWritten);
+            t_alignBuffer = scratch;
         }
     }
+
+    private static void WritePadding(IBufferWriter<byte> writer, int count)
+    {
+        if (count <= 0) return;
+        Span<byte> span = writer.GetSpan(count);
+        span[..count].Fill((byte)' ');
+        writer.Advance(count);
+    }
+
     public KeyValuePair<string, object?> ToKeyValuePair() => new(Name!, Value);
-
-
-
 }

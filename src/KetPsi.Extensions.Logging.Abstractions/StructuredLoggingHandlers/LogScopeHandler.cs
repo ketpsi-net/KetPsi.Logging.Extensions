@@ -35,8 +35,7 @@ public ref struct StartScopeHandler
         }
         else
         {
-            Unsafe.WriteUnaligned(ref Bytes![ByteOffset], value);
-            ByteOffset += Unsafe.SizeOf<T>();
+            KetPsi.Extensions.Logging.Abstractions.HandlerBuffer.WriteUnmanaged(ref Bytes, ref ByteOffset, value);
         }
     }
 }

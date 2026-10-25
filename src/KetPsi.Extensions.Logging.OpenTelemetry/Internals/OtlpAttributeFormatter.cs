@@ -102,14 +102,14 @@ internal static class OtlpAttributeFormatter
         writer.WriteVarInt((ulong)keyValuePayloadSize);
 
         // KeyValue.key = 1
-        writer.WriteString(1, key);
+        writer.WriteString(1, key, keyLen);
 
         // KeyValue.value = 2 → AnyValue
         writer.WriteTag(2, 2);
         writer.WriteVarInt((ulong)anyValuePayloadSize);
 
         // AnyValue.string_value = 1
-        writer.WriteString(1, value);
+        writer.WriteString(1, value, valueLen);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -127,7 +127,7 @@ internal static class OtlpAttributeFormatter
         writer.WriteTag(keyValueFieldNumber, 2);
         writer.WriteVarInt((ulong)keyValuePayloadSize);
 
-        writer.WriteString(1, key);
+        writer.WriteString(1, key, keyLen);
 
         writer.WriteTag(2, 2);
         writer.WriteVarInt((ulong)anyValuePayloadSize);
@@ -150,7 +150,7 @@ internal static class OtlpAttributeFormatter
         writer.WriteTag(keyValueFieldNumber, 2);
         writer.WriteVarInt((ulong)keyValuePayloadSize);
 
-        writer.WriteString(1, key);
+        writer.WriteString(1, key, keyLen);
 
         writer.WriteTag(2, 2);
         writer.WriteVarInt((ulong)anyValuePayloadSize);
@@ -173,7 +173,7 @@ internal static class OtlpAttributeFormatter
         writer.WriteTag(keyValueFieldNumber, 2);
         writer.WriteVarInt((ulong)keyValuePayloadSize);
 
-        writer.WriteString(1, key);
+        writer.WriteString(1, key, keyLen);
 
         writer.WriteTag(2, 2);
         writer.WriteVarInt((ulong)anyValuePayloadSize);
@@ -181,5 +181,140 @@ internal static class OtlpAttributeFormatter
         // AnyValue.double_value = 4 (wire type 1 = fixed64)
         writer.WriteTag(4, 1);
         writer.WriteFixed64(BitConverter.DoubleToUInt64Bits(value));
+    }
+
+    // ------------------------------------------------------------------
+    // Pre-encoded UTF-8 overloads: constant keys, category names and templates are encoded once
+    // instead of being measured and transcoded again for every log record.
+    // ------------------------------------------------------------------
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int CalculateStringSize(ReadOnlySpan<byte> keyUtf8, ReadOnlySpan<byte> valueUtf8, uint keyValueFieldNumber = 1)
+    {
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)valueUtf8.Length) + valueUtf8.Length;
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyUtf8.Length) + keyUtf8.Length) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        return ProtobufMath.GetTagSize(keyValueFieldNumber)
+             + ProtobufMath.GetVarIntSize((ulong)keyValuePayloadSize)
+             + keyValuePayloadSize;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteString(ref ZeroAllocProtobufWriter writer, scoped ReadOnlySpan<byte> keyUtf8, scoped ReadOnlySpan<byte> valueUtf8, uint keyValueFieldNumber = 1)
+    {
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)valueUtf8.Length) + valueUtf8.Length;
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyUtf8.Length) + keyUtf8.Length) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        writer.WriteTag(keyValueFieldNumber, 2);
+        writer.WriteVarInt((ulong)keyValuePayloadSize);
+        writer.WriteBytes(1, keyUtf8);
+        writer.WriteTag(2, 2);
+        writer.WriteVarInt((ulong)anyValuePayloadSize);
+        writer.WriteBytes(1, valueUtf8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int CalculateInt64Size(ReadOnlySpan<byte> keyUtf8, long value, uint keyValueFieldNumber = 1)
+    {
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)value);
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyUtf8.Length) + keyUtf8.Length) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        return ProtobufMath.GetTagSize(keyValueFieldNumber)
+             + ProtobufMath.GetVarIntSize((ulong)keyValuePayloadSize)
+             + keyValuePayloadSize;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteInt64(ref ZeroAllocProtobufWriter writer, scoped ReadOnlySpan<byte> keyUtf8, long value, uint keyValueFieldNumber = 1)
+    {
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)value);
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyUtf8.Length) + keyUtf8.Length) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        writer.WriteTag(keyValueFieldNumber, 2);
+        writer.WriteVarInt((ulong)keyValuePayloadSize);
+        writer.WriteBytes(1, keyUtf8);
+        writer.WriteTag(2, 2);
+        writer.WriteVarInt((ulong)anyValuePayloadSize);
+        writer.WriteTag(3, 0);
+        writer.WriteVarInt((ulong)value);
+    }
+
+    // Char key with an already UTF-8 value (formatted values, JSON): the value is never transcoded twice.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int CalculateStringSize(ReadOnlySpan<char> key, ReadOnlySpan<byte> valueUtf8, uint keyValueFieldNumber = 1)
+    {
+        int keyLen = Encoding.UTF8.GetByteCount(key);
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)valueUtf8.Length) + valueUtf8.Length;
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyLen) + keyLen) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        return ProtobufMath.GetTagSize(keyValueFieldNumber)
+             + ProtobufMath.GetVarIntSize((ulong)keyValuePayloadSize)
+             + keyValuePayloadSize;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteString(ref ZeroAllocProtobufWriter writer, scoped ReadOnlySpan<char> key, scoped ReadOnlySpan<byte> valueUtf8, uint keyValueFieldNumber = 1)
+    {
+        int keyLen = Encoding.UTF8.GetByteCount(key);
+        int anyValuePayloadSize = 1 + ProtobufMath.GetVarIntSize((ulong)valueUtf8.Length) + valueUtf8.Length;
+        int keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyLen) + keyLen) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+
+        writer.WriteTag(keyValueFieldNumber, 2);
+        writer.WriteVarInt((ulong)keyValuePayloadSize);
+        writer.WriteString(1, key, keyLen);
+        writer.WriteTag(2, 2);
+        writer.WriteVarInt((ulong)anyValuePayloadSize);
+        writer.WriteBytes(1, valueUtf8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int KeyValueEnvelope(int keyLen, int anyValuePayloadSize, uint keyValueFieldNumber, out int keyValuePayloadSize)
+    {
+        keyValuePayloadSize =
+            (1 + ProtobufMath.GetVarIntSize((ulong)keyLen) + keyLen) +
+            (1 + ProtobufMath.GetVarIntSize((ulong)anyValuePayloadSize) + anyValuePayloadSize);
+        return ProtobufMath.GetTagSize(keyValueFieldNumber) + ProtobufMath.GetVarIntSize((ulong)keyValuePayloadSize) + keyValuePayloadSize;
+    }
+
+    public static int CalculateDoubleSize(ReadOnlySpan<byte> keyUtf8, double value, uint keyValueFieldNumber = 1)
+        => KeyValueEnvelope(keyUtf8.Length, 1 + 8, keyValueFieldNumber, out _);
+
+    public static int CalculateBoolSize(ReadOnlySpan<byte> keyUtf8, bool value, uint keyValueFieldNumber = 1)
+        => KeyValueEnvelope(keyUtf8.Length, 2, keyValueFieldNumber, out _);
+
+    public static void WriteDouble(ref ZeroAllocProtobufWriter writer, scoped ReadOnlySpan<byte> keyUtf8, double value, uint keyValueFieldNumber = 1)
+    {
+        KeyValueEnvelope(keyUtf8.Length, 1 + 8, keyValueFieldNumber, out int keyValuePayloadSize);
+        writer.WriteTag(keyValueFieldNumber, 2);
+        writer.WriteVarInt((ulong)keyValuePayloadSize);
+        writer.WriteBytes(1, keyUtf8);
+        writer.WriteTag(2, 2);
+        writer.WriteVarInt(1 + 8);
+        writer.WriteTag(4, 1);
+        writer.WriteFixed64(BitConverter.DoubleToUInt64Bits(value));
+    }
+
+    public static void WriteBool(ref ZeroAllocProtobufWriter writer, scoped ReadOnlySpan<byte> keyUtf8, bool value, uint keyValueFieldNumber = 1)
+    {
+        KeyValueEnvelope(keyUtf8.Length, 2, keyValueFieldNumber, out int keyValuePayloadSize);
+        writer.WriteTag(keyValueFieldNumber, 2);
+        writer.WriteVarInt((ulong)keyValuePayloadSize);
+        writer.WriteBytes(1, keyUtf8);
+        writer.WriteTag(2, 2);
+        writer.WriteVarInt(2);
+        writer.WriteTag(2, 0);
+        writer.WriteVarInt(value ? 1u : 0u);
     }
 }

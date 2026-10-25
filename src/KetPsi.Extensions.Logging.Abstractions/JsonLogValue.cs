@@ -35,19 +35,40 @@ public readonly struct JsonLogValue<T>(T? value, JsonTypeInfo<T>? typeInfo = nul
             return;
         }
 
-        var state = t_state ??= new WriterState();
+        // The same value is rendered for the message body and again for sink attributes;
+        // serialize once per log and copy the cached UTF-8 afterwards.
+        writer.Write(GetUtf8());
+    }
 
-        // Re-point the JSON writer DIRECTLY to the provided console stream buffer!
-        state.Writer.Reset(writer);
-        var typeInfo = _typeInfo ?? JsonLogValueSerializationContext.Context?.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>;
-        if (typeInfo != null)
+    private ReadOnlySpan<byte> GetUtf8()
+    {
+        var state = t_state ??= new WriterState();
+        if (state.CachedOperationId != _operationId)
         {
-            JsonSerializer.Serialize(state.Writer, _value, typeInfo);
+            state.Buffer.Clear();
+            state.Writer.Reset(state.Buffer);
+            Serialize(state.Writer);
+            state.CachedOperationId = _operationId;
         }
-        else
+        return state.Buffer.WrittenSpan;
+    }
+
+    private void Serialize(Utf8JsonWriter writer)
+    {
+        if (_typeInfo != null)
         {
-            JsonSerializer.Serialize(state.Writer, _value);
+            JsonSerializer.Serialize(writer, _value!, _typeInfo);
+            return;
         }
+
+        // Generated code declares values whose type it cannot name as object; resolve the runtime type
+        // so a source-generated context (required under NativeAOT) can still be used.
+        Type type = typeof(T) == typeof(object) ? _value!.GetType() : typeof(T);
+        JsonTypeInfo? info = JsonLogValueSerializationContext.Context?.GetTypeInfo(type);
+
+        if (info is JsonTypeInfo<T> typed) JsonSerializer.Serialize(writer, _value!, typed);
+        else if (info != null) JsonSerializer.Serialize(writer, (object?)_value, info);
+        else JsonSerializer.Serialize(writer, _value);
     }
 
     // ---------------------------------------------------------
@@ -69,28 +90,8 @@ public readonly struct JsonLogValue<T>(T? value, JsonTypeInfo<T>? typeInfo = nul
             return true;
         }
 
-        var state = t_state ??= new WriterState();
-
-        if (state.CachedOperationId != _operationId)
-        {
-            state.Buffer.Clear();
-            state.Writer.Reset(state.Buffer);
-
-            var typeInfo = _typeInfo ?? JsonLogValueSerializationContext.Context?.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>;
-            if (typeInfo != null)
-            {
-                JsonSerializer.Serialize(state.Writer, _value, typeInfo);
-            }
-            else
-            {
-                JsonSerializer.Serialize(state.Writer, _value);
-            }
-
-            state.CachedOperationId = _operationId;
-        }
-
         var status = System.Text.Unicode.Utf8.ToUtf16(
-            source: state.Buffer.WrittenSpan,
+            source: GetUtf8(),
             destination: destination,
             out _,
             out charsWritten,
@@ -103,11 +104,9 @@ public readonly struct JsonLogValue<T>(T? value, JsonTypeInfo<T>? typeInfo = nul
     public override string ToString()
     {
         if (_value is null) return "null";
-        var typeInfo = _typeInfo ?? JsonLogValueSerializationContext.Context?.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>;
-
-        return typeInfo != null
-            ? JsonSerializer.Serialize(_value, typeInfo)
-            : JsonSerializer.Serialize(_value);
+        var buffer = new ArrayBufferWriter<byte>(256);
+        using (var writer = new Utf8JsonWriter(buffer)) Serialize(writer);
+        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     public string ToString(string? format, IFormatProvider? formatProvider) => ToString();

@@ -3,6 +3,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Configuration;
 using Microsoft.Extensions.Options;
 
 namespace KetPsi.Extensions.Logging.OpenTelemetry
@@ -15,8 +16,9 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
         }
         public static ILoggingBuilder AddZeroAllocOtlp(this ILoggingBuilder builder, Func<IZeroAllocOtlpOptionsBuilder, IZeroAllocOtlpOptionsBuilder> options)
         {
-            // 1. Ensure the logging configuration system is active
-            //builder.AddConfiguration();
+            // 1. Ensure the logging configuration system is active. RegisterProviderOptions below needs it;
+            //    hosts add it already, but a bare ServiceCollection/LoggerFactory does not (it would throw).
+            builder.AddConfiguration();
 
             // 2. Bind the "Logging:OpenTelemetry" section of appsettings.json to KetPsiOtlpOptions
             Microsoft.Extensions.Logging.Configuration.LoggerProviderOptions.RegisterProviderOptions<KetPsiOtlpOptions, ZeroAllocOtlpLoggerProvider>(builder.Services);
@@ -53,7 +55,8 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
                     BaseAddress = new Uri(string.IsNullOrEmpty(otlp.Endpoint) ? opt.Endpoint : otlp.Endpoint)
                 };
 
-                return new ZeroAllocOtlpLoggerProvider(client, opt.QueueCapacity, otlp.Resources);
+                return new ZeroAllocOtlpLoggerProvider(client, opt.QueueCapacity, otlp.Resources,
+                    otlp.IncludeFormattedMessage ?? opt.IncludeFormattedMessage);
             }));
 
             return builder;

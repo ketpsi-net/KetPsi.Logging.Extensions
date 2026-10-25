@@ -39,8 +39,7 @@ internal sealed class JsonConsoleFormatter : IZeroAllocConsoleFormatter
         var msgBuffer = _tsMessageBuffer ??= new ArrayBufferWriter<byte>(512);
         msgBuffer.Clear();
 
-        if (state is IDeferredUtf8Formatter deferredFormatter) deferredFormatter.FormatTo(msgBuffer);
-        else
+        if (!StructuredLogStateDispatcher.TryFormatTo(ref state, msgBuffer))
         {
             string msg = formatter(state, exception);
             int maxBytes = System.Text.Encoding.UTF8.GetMaxByteCount(msg.Length);

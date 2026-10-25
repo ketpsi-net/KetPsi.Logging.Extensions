@@ -372,10 +372,16 @@ public class SimpleConsoleFormatterTests : IDisposable
     // IDeferredUtf8Formatter fast-path vs fallback
     // =====================================================================
 
-    private readonly struct DeferredMsg : IDeferredUtf8Formatter
+    // Mirrors a generated state: implements both interfaces and is registered with the dispatcher.
+    private readonly struct DeferredMsg : IDeferredUtf8Formatter, IStructuredLogState
     {
         private readonly string _m;
         public DeferredMsg(string m) => _m = m;
+        public ReadOnlySpan<char> OriginalFormat => _m;
+        public ReadOnlySpan<byte> OriginalFormatUtf8 => Encoding.UTF8.GetBytes(_m);
+        public void WriteParameters<TWriter>(ref TWriter writer) where TWriter : struct, ILogParameterWriter { }
+        public int ParameterCount => 0;
+        public void FormatTo(IPositionedBufferWriter w, int[] valueRanges) => FormatTo(w);
         public void FormatTo(IBufferWriter<byte> w)
         {
             var b = Encoding.UTF8.GetBytes(_m);
@@ -387,6 +393,7 @@ public class SimpleConsoleFormatterTests : IDisposable
     [Fact]
     public void Format_IDeferredUtf8Formatter_UsesCache_NotFallback()
     {
+        StructuredLogStateDispatcher.Register<DeferredMsg>();
         var f = CreateFormatter(Defaults());
         var buf = CreateBuffer();
         bool fallbackCalled = false;

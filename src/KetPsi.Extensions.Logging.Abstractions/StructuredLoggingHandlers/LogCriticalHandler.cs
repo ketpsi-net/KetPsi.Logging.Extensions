@@ -25,6 +25,6 @@ public ref struct LogCriticalHandler
     public void AppendFormatted<T>(T value, int alignment = 0, string? format = null)
     {
         if (RuntimeHelpers.IsReferenceOrContainsReferences<T>()) References![RefOffset++] = value;
-        else { Unsafe.WriteUnaligned(ref Bytes![ByteOffset], value); ByteOffset += Unsafe.SizeOf<T>(); }
+        else KetPsi.Extensions.Logging.Abstractions.HandlerBuffer.WriteUnmanaged(ref Bytes, ref ByteOffset, value);
     }
 }

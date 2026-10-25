@@ -14,9 +14,10 @@ namespace Microsoft.Extensions.Logging
     /// <list type="bullet">
     /// <item><description><c>{value:@name}</c> : Overrides the structured log property name.</description></item>
     /// <item><description><c>{value:format}</c> : Applies standard C# string formatting (e.g., <c>C2</c>, <c>yyyy-MM-dd</c>).</description></item>
-    /// <item><description><c>{value:@name:length}</c> : Overrides the property name and sets alignment/length.</description></item>
-    /// <item><description><c>{value:@name:format:length}</c> : Overrides the property name, applies standard format, and alignment.</description></item>
-    /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and replaces the entire value with <c>***</c>.</description></item>
+    /// <item><description><c>{value,10:@name}</c> : Pads the rendered value to 10 characters (negative values left-align).</description></item>
+    /// <item><description><c>{value:@name:json}</c> / <c>{value:@name:json:indexed}</c> : Serializes the value as JSON.</description></item>
+    /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
+    /// <item><description><c>{value:@name:mask:4..8}</c> : Masks the characters in the given range (C# <see cref="Range"/> syntax).</description></item>
     /// <item><description><c>{value:@name:mask:4}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
     /// <item><description><c>{value:@name:format:mask:4}</c> : Combines property name override, standard formatting, and partial masking.</description></item>
     /// </list>
@@ -168,6 +169,174 @@ namespace Microsoft.Extensions.Logging
         }
 
         /// <summary>
+        /// Formats and writes a trace log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogTrace(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogTraceHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a trace log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogTrace(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogTraceHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a debug log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogDebug(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogDebugHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a debug log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogDebug(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogDebugHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an information log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogInformation(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogInformationHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an information log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogInformation(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogInformationHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a warning log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogWarning(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogWarningHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a warning log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogWarning(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogWarningHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an error log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogError(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogErrorHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an error log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogError(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogErrorHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a critical log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogCritical(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogCriticalHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a critical log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogCritical(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogCriticalHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
         /// Formats the message and creates a logical operation scope using advanced interpolated string logging.
         /// </summary>
         /// <remarks>
@@ -178,9 +347,10 @@ namespace Microsoft.Extensions.Logging
         /// <list type="bullet">
         /// <item><description><c>{value:@name}</c> : Overrides the structured log property name.</description></item>
         /// <item><description><c>{value:format}</c> : Applies standard C# string formatting (e.g., <c>C2</c>, <c>yyyy-MM-dd</c>).</description></item>
-        /// <item><description><c>{value:@name:length}</c> : Overrides the property name and sets alignment/length.</description></item>
-        /// <item><description><c>{value:@name:format:length}</c> : Overrides the property name, applies standard format, and alignment.</description></item>
-        /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and replaces the entire value with <c>***</c>.</description></item>
+        /// <item><description><c>{value,10:@name}</c> : Pads the rendered value to 10 characters (negative values left-align).</description></item>
+        /// <item><description><c>{value:@name:json}</c> / <c>{value:@name:json:indexed}</c> : Serializes the value as JSON.</description></item>
+        /// <item><description><c>{value:@name:mask}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
+        /// <item><description><c>{value:@name:mask:4..8}</c> : Masks the characters in the given range (C# <see cref="Range"/> syntax).</description></item>
         /// <item><description><c>{value:@name:mask:4}</c> : Overrides the property name and masks all but the last 4 characters.</description></item>
         /// <item><description><c>{value:@name:format:mask:4}</c> : Combines property name override, standard formatting, and partial masking.</description></item>
         /// </list>

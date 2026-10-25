@@ -16,18 +16,60 @@ internal sealed class OtlpBatcher : IAsyncDisposable
     private BufferState _active;
     private SpinLock _spinLock;
     private const int BufferCapacity = 65536;
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(5);
 
-    private int _pendingWriters;
+    // Recycled batch buffers. Once warm, the logging threads never allocate a buffer: the HTTP worker
+    // hands each sent (or dropped) buffer back here instead of releasing it.
+    private readonly object _freeLock = new();
+    private readonly Stack<BufferState> _freeBuffers;
+    private readonly int _maxFreeBuffers;
+
+    // Single-reader worker: one reusable request buffer instead of renting ~64 KB per POST.
+    private byte[] _networkBuffer = [];
+
+    private long _exportedBatches;
+    private long _droppedBatches;
+    private long _droppedRecords;
+
+    // Batches waiting in the export queue (tracked here: BoundedChannel.Reader.Count takes a lock).
+    private readonly int _queueCapacity;
+    private int _queuedBatches;
 
     private readonly byte[] _cachedResourceBytes = [];
     private readonly ConcurrentDictionary<string, byte[]> _scopeBytesCache = new(StringComparer.Ordinal);
 
+    /// <summary>Batches handed to the HTTP worker (diagnostics).</summary>
+    internal long ExportedBatches => Interlocked.Read(ref _exportedBatches);
+
+    /// <summary>Batches dropped because the export queue was full (diagnostics).</summary>
+    internal long DroppedBatches => Interlocked.Read(ref _droppedBatches);
+
+    /// <summary>Records dropped before encoding because the export queue was full (diagnostics).</summary>
+    internal long DroppedRecords => Interlocked.Read(ref _droppedRecords);
+
+    /// <summary>
+    /// True while the export queue is full. Loggers then drop records before encoding them, as the
+    /// OpenTelemetry SDK's batch processor does, instead of encoding batches that would be dropped anyway.
+    /// </summary>
+    public bool IsSaturated
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Volatile.Read(ref _queuedBatches) >= _queueCapacity;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void RecordDropped() => Interlocked.Increment(ref _droppedRecords);
+
     public OtlpBatcher(HttpClient httpClient, int queueCapacity, byte[] resource)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _active = new BufferState(BufferCapacity);
         _spinLock = new SpinLock(enableThreadOwnerTracking: false);
-        _pendingWriters = 0;
+
+        // Every buffer is either active, queued, being sent, or free; this bounds the free list.
+        _queueCapacity = queueCapacity;
+        _maxFreeBuffers = queueCapacity + 4;
+        _freeBuffers = new Stack<BufferState>(Math.Min(_maxFreeBuffers, 64));
+        _active = RentBuffer(BufferCapacity);
 
         _cachedResourceBytes = resource ?? [];
 
@@ -105,15 +147,9 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
             if (scopeChanged || _active.BytesWritten + requiredSize > _active.Array.Length)
             {
-                _active.IsRetired = true;
-                Thread.MemoryBarrier();
-
-                if (Volatile.Read(ref _active.PendingWriters) == 0 && _active.BytesWritten > 0)
-                {
-                    _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten, _active.ScopeBytes!));
-                }
-
-                _active = new BufferState(BufferCapacity);
+                RetireActive();
+                // A record larger than a standard buffer gets a dedicated (non-pooled) one.
+                _active = RentBuffer(Math.Max(BufferCapacity, requiredSize));
             }
 
             _active.ScopeBytes ??= scopeBytes;
@@ -136,9 +172,9 @@ internal sealed class OtlpBatcher : IAsyncDisposable
     {
         int remaining = Interlocked.Decrement(ref stateRef.PendingWriters);
 
-        if (remaining == 0 && stateRef.IsRetired && stateRef.BytesWritten > 0)
+        if (remaining == 0 && stateRef.IsRetired)
         {
-            _channel.Writer.TryWrite(new BatchPayload(stateRef.Array, stateRef.BytesWritten, stateRef.ScopeBytes!));
+            Dispatch(stateRef);
         }
     }
 
@@ -150,20 +186,87 @@ internal sealed class OtlpBatcher : IAsyncDisposable
             _spinLock.Enter(ref lockTaken);
             if (_active.BytesWritten == 0) return;
 
-            _active.IsRetired = true;
-            Thread.MemoryBarrier();
-
-            if (Volatile.Read(ref _active.PendingWriters) == 0)
-            {
-                _channel.Writer.TryWrite(new BatchPayload(_active.Array, _active.BytesWritten, _active.ScopeBytes ?? []));
-            }
-
-            _active = new BufferState(BufferCapacity);
+            RetireActive();
+            _active = RentBuffer(BufferCapacity);
         }
         finally
         {
             if (lockTaken) _spinLock.Exit(useMemoryBarrier: false);
         }
+    }
+
+    /// <summary>Retires the active buffer (caller holds the spin lock); it is dispatched once its last writer commits.</summary>
+    private void RetireActive()
+    {
+        var retired = _active;
+        retired.IsRetired = true;
+        Thread.MemoryBarrier();
+
+        if (Volatile.Read(ref retired.PendingWriters) == 0)
+        {
+            Dispatch(retired);
+        }
+    }
+
+    /// <summary>
+    /// Queues a retired buffer for export exactly once. Both the retiring thread and the last committing writer
+    /// can observe "retired with no pending writers", so the claim is atomic.
+    /// </summary>
+    private void Dispatch(BufferState state)
+    {
+        if (Interlocked.Exchange(ref state.Dispatched, 1) != 0) return;
+
+        if (state.BytesWritten == 0)
+        {
+            ReturnBuffer(state);
+            return;
+        }
+
+        Interlocked.Increment(ref _queuedBatches);
+        if (_channel.Writer.TryWrite(new BatchPayload(state.Array, state.BytesWritten, state.ScopeBytes ?? [], state)))
+        {
+            Interlocked.Increment(ref _exportedBatches);
+        }
+        else
+        {
+            // Export queue full (collector slower than the producers): drop the batch but keep the buffer.
+            Interlocked.Decrement(ref _queuedBatches);
+            Interlocked.Increment(ref _droppedBatches);
+            ReturnBuffer(state);
+        }
+    }
+
+    private BufferState RentBuffer(int minimumCapacity)
+    {
+        if (minimumCapacity <= BufferCapacity)
+        {
+            lock (_freeLock)
+            {
+                if (_freeBuffers.TryPop(out var recycled))
+                {
+                    recycled.Reset();
+                    return recycled;
+                }
+            }
+            return new BufferState(BufferCapacity, pooled: true);
+        }
+        return new BufferState(minimumCapacity, pooled: false);
+    }
+
+    internal void ReturnBuffer(BufferState state)
+    {
+        if (state.Pooled)
+        {
+            lock (_freeLock)
+            {
+                if (_freeBuffers.Count < _maxFreeBuffers)
+                {
+                    _freeBuffers.Push(state);
+                    return;
+                }
+            }
+        }
+        state.Release();
     }
 
     internal int CalculateTotalRequestSize(int batchLength, int scopeSize)
@@ -217,36 +320,32 @@ internal sealed class OtlpBatcher : IAsyncDisposable
     private async Task ProcessQueueAsync()
     {
         var reader = _channel.Reader;
-        var token = _cts.Token;
 
         try
         {
-            while (await reader.WaitToReadAsync(token).ConfigureAwait(false))
+            // Not cancelled by the token: on dispose the channel is completed and the queue drained.
+            while (await reader.WaitToReadAsync().ConfigureAwait(false))
             {
                 while (reader.TryRead(out var batch))
                 {
-                    byte[]? networkBuffer = null;
-
+                    Interlocked.Decrement(ref _queuedBatches);
                     try
                     {
                         int totalRequestSize = CalculateTotalRequestSize(batch.Length, batch.ScopeBytes.Length);
-                        networkBuffer = ArrayPool<byte>.Shared.Rent(totalRequestSize);
-                        int bytesWritten = StitchNetworkPayload(batch, networkBuffer);
+                        if (_networkBuffer.Length < totalRequestSize)
+                            _networkBuffer = new byte[Math.Max(totalRequestSize, BufferCapacity * 2)];
+                        int bytesWritten = StitchNetworkPayload(batch, _networkBuffer);
 
-                        using var content = new PooledArrayHttpContent(networkBuffer, bytesWritten);
-                        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-protobuf");
-
-                        using var response = await _httpClient.PostAsync(string.Empty, content, token).ConfigureAwait(false);
+                        using var content = new PooledArrayHttpContent(_networkBuffer, bytesWritten);
+                        using var response = await _httpClient.PostAsync(string.Empty, content, _cts.Token).ConfigureAwait(false);
                     }
                     catch (Exception)
                     {
                     }
                     finally
                     {
-                        if (networkBuffer != null)
-                            ArrayPool<byte>.Shared.Return(networkBuffer);
-
-                        ArrayPool<byte>.Shared.Return(batch.Buffer);
+                        if (batch.Owner != null) ReturnBuffer(batch.Owner);
+                        else ArrayPool<byte>.Shared.Return(batch.Buffer);
                     }
                 }
             }
@@ -258,25 +357,39 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _cts.CancelAsync();
-        _channel.Writer.Complete();
+        // Send what is buffered, then let the worker drain the queue before stopping.
+        Flush();
+        _channel.Writer.TryComplete();
+        // Bound the drain: an unreachable collector must not stall shutdown on HTTP timeouts.
+        _cts.CancelAfter(DrainTimeout);
 
         try
         {
-            await Task.WhenAll(_workerTask, _timerTask).ConfigureAwait(false);
+            await _workerTask.ConfigureAwait(false);
         }
         catch (Exception)
         {
         }
 
-        Flush();
+        await _cts.CancelAsync();
+        try
+        {
+            await _timerTask.ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+        }
+
         _cts.Dispose();
     }
 
-    internal readonly struct BatchPayload(byte[] buffer, int length, byte[] scopeBytes)
+    internal readonly struct BatchPayload(byte[] buffer, int length, byte[] scopeBytes, BufferState? owner = null)
     {
         public readonly byte[] Buffer = buffer;
         public readonly int Length = length;
         public readonly byte[] ScopeBytes = scopeBytes;
+
+        /// <summary>The recycled buffer this batch lives in; returned to the batcher after sending.</summary>
+        public readonly BufferState? Owner = owner;
     }
 }

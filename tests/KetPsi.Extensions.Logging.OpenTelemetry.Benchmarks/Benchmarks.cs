@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 
 using BenchmarkDotNet.Attributes;
 
+using KetPsi.Extensions.Logging.OpenTelemetry;
 using KetPsi.Extensions.Logging.OpenTelemetry.Internals;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -65,7 +66,7 @@ public class OtlpLoggerBenchmarks
                 {
                     otlp.Endpoint = new Uri("http://localhost:4318/v1/logs");
                     otlp.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.HttpProtobuf;
-                    otlp.HttpClientFactory = () => new HttpClient(new NoOpHttpHandler());
+                    // Real export to the local collector (Microsoft serializes protobuf on its batch export thread).
                 });
             });
         });
@@ -75,10 +76,44 @@ public class OtlpLoggerBenchmarks
         zeroServices.AddLogging(builder =>
         {
             builder.ClearProviders();
-            builder.Services.AddSingleton<ILoggerProvider>(srv =>
-                new ZeroAllocOtlpLoggerProvider(new HttpClient(new NoOpHttpHandler()), 1024, []));
+            builder.AddZeroAllocOtlp(opt => opt.UseEndpoint("http://localhost:4318/v1/logs"));
+            // Same HTTP setup as AddZeroAllocOtlp, exporting for real to the local collector.
+            //builder.Services.AddSingleton<ILoggerProvider>(srv =>
+            //    new ZeroAllocOtlpLoggerProvider(
+            //        new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) }, disposeHandler: true)
+            //        {
+            //            BaseAddress = new Uri("http://localhost:4318/v1/logs")
+            //        },
+            //        1024, []));
         });
         _zeroLogger = zeroServices.BuildServiceProvider().GetRequiredService<ILogger<OtlpLoggerBenchmarks>>();
+
+        // Delivered-path baseline: an instant no-op HTTP handler keeps the export queue from saturating,
+        // so every record is fully encoded (never dropped early). This measures the real per-log cost.
+        var deliveredServices = new ServiceCollection();
+        deliveredServices.AddLogging(builder =>
+        {
+            builder.ClearProviders();
+            builder.Services.AddSingleton<ILoggerProvider>(_ => new ZeroAllocOtlpLoggerProvider(
+                new HttpClient(new NoOpHttpHandler()) { BaseAddress = new Uri("http://localhost/v1/logs") }, 1024, []));
+        });
+        _zeroDeliveredLogger = deliveredServices.BuildServiceProvider().GetRequiredService<ILogger<OtlpLoggerBenchmarks>>();
+    }
+
+    private ILogger<OtlpLoggerBenchmarks> _zeroDeliveredLogger = null!;
+
+    [Benchmark]
+    public void Interpolated_Extreme_Delivered()
+    {
+        _zeroDeliveredLogger.LogInformation(
+            $"Processing heavy transaction {_txId} for user {_userId} from IP {_ipAddress}. " +
+            $"Amount: {_amount} {_currency}, Status: {_status}, Retries: {_retries}, " +
+            $"Gateway: {_gateway}, Latency: {_latency}ms. Payload: {_payload:json}");
+
+        _zeroDeliveredLogger.LogInformation(
+           $"Processing heavy transaction {_txId} for user {_userId} from IP {_ipAddress}. " +
+           $"Amount: {_amount} {_currency}, Status: {_status}, Retries: {_retries}, " +
+           $"Gateway: {_gateway}, Latency: {_latency}ms. Payload: {_payload:json}");
     }
 
     //[Benchmark(Baseline = true)]
@@ -141,16 +176,16 @@ public class OtlpLoggerBenchmarks
     [Benchmark]
     public void Interpolated_Extreme_LogInformation()
     {
-        // KetPsi Source Generator intercepts this.
+        // KetPsi Source Generator intercepts this (one log per op, like the Standard benchmark).
         _zeroLogger.LogInformation(
             $"Processing heavy transaction {_txId} for user {_userId} from IP {_ipAddress}. " +
             $"Amount: {_amount} {_currency}, Status: {_status}, Retries: {_retries}, " +
             $"Gateway: {_gateway}, Latency: {_latency}ms. Payload: {_payload:json}");
 
         _zeroLogger.LogInformation(
-            $"Processing heavy transaction {_txId} for user {_userId} from IP {_ipAddress}. " +
-            $"Amount: {_amount} {_currency}, Status: {_status}, Retries: {_retries}, " +
-            $"Gateway: {_gateway}, Latency: {_latency}ms. Payload: {_payload:json}");
+           $"Processing heavy transaction {_txId} for user {_userId} from IP {_ipAddress}. " +
+           $"Amount: {_amount} {_currency}, Status: {_status}, Retries: {_retries}, " +
+           $"Gateway: {_gateway}, Latency: {_latency}ms. Payload: {_payload:json}");
     }
 
     //[Benchmark]

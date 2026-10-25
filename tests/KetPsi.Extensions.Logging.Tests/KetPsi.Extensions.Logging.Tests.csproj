@@ -6,6 +6,7 @@
 		<Nullable>enable</Nullable>
 		<IsPackable>false</IsPackable>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<InterceptorsPreviewNamespaces>$(InterceptorsPreviewNamespaces);KetPsi.Extensions.Logging</InterceptorsPreviewNamespaces>
 
 	</PropertyGroup>
 
@@ -35,6 +36,7 @@
 		<ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.Abstractions\KetPsi.Extensions.Logging.Abstractions.csproj" />
 		<ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.Console\KetPsi.Extensions.Logging.Console.csproj" />
 		<ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.OpenTelemetry\KetPsi.Extensions.Logging.OpenTelemetry.csproj" />
+		<ProjectReference Include="..\..\src\KetPsi.Extensions.Logging.Generator\KetPsi.Extensions.Logging.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
 	</ItemGroup>
 
 	<ItemGroup>
