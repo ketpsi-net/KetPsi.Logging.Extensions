@@ -29,6 +29,11 @@ internal sealed class OtlpBatcher : IAsyncDisposable
 
     private long _exportedBatches;
     private long _droppedBatches;
+    private long _droppedRecords;
+
+    // Batches waiting in the export queue (tracked here: BoundedChannel.Reader.Count takes a lock).
+    private readonly int _queueCapacity;
+    private int _queuedBatches;
 
     private readonly byte[] _cachedResourceBytes = [];
     private readonly ConcurrentDictionary<string, byte[]> _scopeBytesCache = new(StringComparer.Ordinal);
@@ -39,12 +44,29 @@ internal sealed class OtlpBatcher : IAsyncDisposable
     /// <summary>Batches dropped because the export queue was full (diagnostics).</summary>
     internal long DroppedBatches => Interlocked.Read(ref _droppedBatches);
 
+    /// <summary>Records dropped before encoding because the export queue was full (diagnostics).</summary>
+    internal long DroppedRecords => Interlocked.Read(ref _droppedRecords);
+
+    /// <summary>
+    /// True while the export queue is full. Loggers then drop records before encoding them, as the
+    /// OpenTelemetry SDK's batch processor does, instead of encoding batches that would be dropped anyway.
+    /// </summary>
+    public bool IsSaturated
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Volatile.Read(ref _queuedBatches) >= _queueCapacity;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void RecordDropped() => Interlocked.Increment(ref _droppedRecords);
+
     public OtlpBatcher(HttpClient httpClient, int queueCapacity, byte[] resource)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _spinLock = new SpinLock(enableThreadOwnerTracking: false);
 
         // Every buffer is either active, queued, being sent, or free; this bounds the free list.
+        _queueCapacity = queueCapacity;
         _maxFreeBuffers = queueCapacity + 4;
         _freeBuffers = new Stack<BufferState>(Math.Min(_maxFreeBuffers, 64));
         _active = RentBuffer(BufferCapacity);
@@ -200,6 +222,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
             return;
         }
 
+        Interlocked.Increment(ref _queuedBatches);
         if (_channel.Writer.TryWrite(new BatchPayload(state.Array, state.BytesWritten, state.ScopeBytes ?? [], state)))
         {
             Interlocked.Increment(ref _exportedBatches);
@@ -207,6 +230,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
         else
         {
             // Export queue full (collector slower than the producers): drop the batch but keep the buffer.
+            Interlocked.Decrement(ref _queuedBatches);
             Interlocked.Increment(ref _droppedBatches);
             ReturnBuffer(state);
         }
@@ -304,6 +328,7 @@ internal sealed class OtlpBatcher : IAsyncDisposable
             {
                 while (reader.TryRead(out var batch))
                 {
+                    Interlocked.Decrement(ref _queuedBatches);
                     try
                     {
                         int totalRequestSize = CalculateTotalRequestSize(batch.Length, batch.ScopeBytes.Length);

@@ -26,6 +26,17 @@ public class ZeroAllocOtlpLoggerBehaviorTests
         }
     }
 
+    private sealed class BlockingHandler : HttpMessageHandler
+    {
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Release.Task.WaitAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
+    }
+
     private static bool Contains(byte[] haystack, string text) => haystack.AsSpan().IndexOf(Encoding.UTF8.GetBytes(text)) >= 0;
 
     private static async Task<byte[]> ExportOne(bool includeFormattedMessage)
@@ -107,4 +118,33 @@ public class ZeroAllocOtlpLoggerBehaviorTests
     }
 
     private static bool Contains(byte[] haystack, byte[] needle) => haystack.AsSpan().IndexOf(needle) >= 0;
+
+    [Fact]
+    public async Task SaturatedQueue_DropsRecordsBeforeEncoding()
+    {
+        var handler = new BlockingHandler();
+        var provider = new ZeroAllocOtlpLoggerProvider(
+            new HttpClient(handler) { BaseAddress = new Uri("http://localhost/v1/logs") }, queueCapacity: 1, [], includeFormattedMessage: true);
+        var logger = provider.CreateLogger("Saturation");
+        var batcher = provider.Batcher;
+        string padding = new('x', 4_000);
+        try
+        {
+            // The worker holds one batch in flight and the queue holds one more; from then on the queue stays full.
+            for (int i = 0; i < 2_000; i++)
+                logger.LogInformation($"{padding:@Padding} {i:@I}");
+
+            Assert.True(batcher.IsSaturated);
+            Assert.True(batcher.DroppedRecords > 0);
+
+            long droppedBefore = batcher.DroppedRecords;
+            logger.LogInformation($"dropped {1:@One}");
+            Assert.Equal(droppedBefore + 1, batcher.DroppedRecords);
+        }
+        finally
+        {
+            handler.Release.TrySetResult();
+            await provider.DisposeAsync();
+        }
+    }
 }

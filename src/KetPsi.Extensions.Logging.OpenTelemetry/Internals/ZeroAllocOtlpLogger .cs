@@ -60,6 +60,13 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
     {
         if (!IsEnabled(logLevel)) return;
 
+        // Export queue full: anything encoded now would be dropped with its batch, so drop it before paying for it.
+        if (Batcher.IsSaturated)
+        {
+            Batcher.RecordDropped();
+            return;
+        }
+
         // Generated KetPsi states are dispatched with their concrete type (no boxing, no reflection; NativeAOT-safe).
         var visitor = new StructuredStateVisitor(this, logLevel, eventId, exception);
         if (StructuredLogStateDispatcher.TryAccept(ref state, ref visitor)) return;
