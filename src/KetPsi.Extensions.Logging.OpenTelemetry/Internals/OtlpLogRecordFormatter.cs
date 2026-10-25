@@ -33,6 +33,18 @@ internal static class OtlpLogRecordFormatter
         ReadOnlySpan<byte> traceId,
         ReadOnlySpan<byte> spanId,
         string? eventName = null)
+        => CalculateLogRecordSizeUtf8Body(timeUnixNano, severityNumber, Encoding.UTF8.GetBytes(severityText), bodyUtf8Length, attributesSize, traceId, spanId, eventName);
+
+    /// <summary>Size calculation with a pre-encoded severity text (hot path).</summary>
+    public static int CalculateLogRecordSizeUtf8Body(
+        long timeUnixNano,
+        int severityNumber,
+        ReadOnlySpan<byte> severityTextUtf8,
+        int bodyUtf8Length,
+        int attributesSize,
+        ReadOnlySpan<byte> traceId,
+        ReadOnlySpan<byte> spanId,
+        string? eventName = null)
     {
         int size = 0;
 
@@ -43,7 +55,7 @@ internal static class OtlpLogRecordFormatter
         // Field 2: severity_number
         size += 1 + ProtobufMath.GetVarIntSize((ulong)severityNumber);
         // Field 3: severity_text
-        int textBytes = Encoding.UTF8.GetByteCount(severityText);
+        int textBytes = severityTextUtf8.Length;
         size += 1 + ProtobufMath.GetVarIntSize((ulong)textBytes) + textBytes;
 
         // Field 5: body (AnyValue -> stringValue)
@@ -78,7 +90,7 @@ internal static class OtlpLogRecordFormatter
         scoped ReadOnlySpan<byte> spanId,
         string? eventName = null)
     {
-        WriteCore(ref writer, timeUnixNano, severityNumber, severityText, traceId, spanId, bodyUtf8: default, bodyChars: body, eventName: eventName);
+        WriteCore(ref writer, timeUnixNano, severityNumber, Encoding.UTF8.GetBytes(severityText), traceId, spanId, bodyUtf8: default, bodyChars: body, eventName: eventName);
     }
 
     /// <summary>
@@ -94,34 +106,44 @@ internal static class OtlpLogRecordFormatter
         scoped ReadOnlySpan<byte> spanId,
         string? eventName = null)
     {
-        WriteCore(ref writer, timeUnixNano, severityNumber, severityText, traceId, spanId, bodyUtf8: bodyUtf8, bodyChars: default, eventName: eventName);
+        WriteCore(ref writer, timeUnixNano, severityNumber, Encoding.UTF8.GetBytes(severityText), traceId, spanId, bodyUtf8: bodyUtf8, bodyChars: default, eventName: eventName);
+    }
+
+    /// <summary>Writes a LogRecord with a pre-encoded severity text (hot path).</summary>
+    public static void WriteLogRecordUtf8Body(
+        ref ZeroAllocProtobufWriter writer,
+        long timeUnixNano,
+        int severityNumber,
+        scoped ReadOnlySpan<byte> severityTextUtf8,
+        scoped ReadOnlySpan<byte> bodyUtf8,
+        scoped ReadOnlySpan<byte> traceId,
+        scoped ReadOnlySpan<byte> spanId,
+        string? eventName = null)
+    {
+        WriteCore(ref writer, timeUnixNano, severityNumber, severityTextUtf8, traceId, spanId, bodyUtf8: bodyUtf8, bodyChars: default, eventName: eventName);
     }
 
     private static void WriteCore(
         ref ZeroAllocProtobufWriter writer,
         long timeUnixNano,
         int severityNumber,
-        string severityText,
+        scoped ReadOnlySpan<byte> severityTextUtf8,
         scoped ReadOnlySpan<byte> traceId,
         scoped ReadOnlySpan<byte> spanId,
         scoped ReadOnlySpan<byte> bodyUtf8,
         scoped ReadOnlySpan<char> bodyChars,
         string? eventName = null)
     {
-        Span<byte> timeBytes = stackalloc byte[9];
-        timeBytes[0] = 0x09;
-        BinaryPrimitives.WriteInt64LittleEndian(timeBytes.Slice(1), timeUnixNano);
-        writer.WriteRawBytes(timeBytes);
-
-        Span<byte> obsTimeBytes = stackalloc byte[9];
-        obsTimeBytes[0] = 0x59;
-        BinaryPrimitives.WriteInt64LittleEndian(obsTimeBytes.Slice(1), timeUnixNano);
-        writer.WriteRawBytes(obsTimeBytes);
+        // Field 1 time_unix_nano and field 11 observed_time_unix_nano (fixed64; tags 0x09 / 0x59)
+        writer.WriteTag(1, 1);
+        writer.WriteFixed64((ulong)timeUnixNano);
+        writer.WriteTag(11, 1);
+        writer.WriteFixed64((ulong)timeUnixNano);
 
         writer.WriteTag(2, 0);
         writer.WriteVarInt((ulong)severityNumber);
 
-        writer.WriteString(3, severityText.AsSpan());
+        writer.WriteBytes(3, severityTextUtf8);
 
         // Field 5: body (AnyValue.stringValue)
         if (!bodyUtf8.IsEmpty)

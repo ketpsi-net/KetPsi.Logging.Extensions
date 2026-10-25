@@ -1,5 +1,6 @@
 ﻿using System.Buffers;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 using KetPsi.Extensions.Logging.Abstractions;
 
@@ -12,6 +13,24 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
     private readonly string _categoryName;
     private readonly ZeroAllocOtlpLoggerProvider _provider;
     private readonly byte[] _scopeBytes;
+    private readonly byte[] _categoryUtf8;
+
+    // Per-thread body buffer: allocating a writer per log would break the zero-allocation hot path.
+    [ThreadStatic]
+    private static PooledByteBufferWriter? t_bodyWriter;
+    [ThreadStatic]
+    private static PooledByteBufferWriter? t_valueArena;
+    [ThreadStatic]
+    private static int[]? t_valueRanges;
+
+    // Take-ownership like the writers: a value whose ToString logs on this thread gets its own array
+    // instead of overwriting the outer call's ranges.
+    private static int[] RentValueRanges(int length)
+    {
+        var ranges = t_valueRanges;
+        t_valueRanges = null;
+        return ranges is not null && ranges.Length >= length ? ranges : new int[Math.Max(length, 32)];
+    }
 
     public OtlpBatcher Batcher => _provider.Batcher;
     public string CategoryName => _categoryName;
@@ -22,6 +41,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         _provider = provider;
         // scope.name = logger category (matches standard OTEL / Microsoft exporter)
         _scopeBytes = provider.Batcher.GetOrCreateScopeBytes(categoryName);
+        _categoryUtf8 = System.Text.Encoding.UTF8.GetBytes(categoryName);
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull
@@ -40,13 +60,65 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
     {
         if (!IsEnabled(logLevel)) return;
 
-        if (StructuredLogProcessorCache<TState>.Process != null)
+        // Export queue full: anything encoded now would be dropped with its batch, so drop it before paying for it.
+        if (Batcher.IsSaturated)
         {
-            StructuredLogProcessorCache<TState>.Process(this, logLevel, eventId, ref state, exception);
+            Batcher.RecordDropped();
+            return;
+        }
+
+        // Generated KetPsi states: hot path is a cached delegate bound to the concrete state type (no boxing,
+        // no reflection, NativeAOT-safe). The visitor double dispatch only runs once per type to populate it.
+        var processor = OtlpProcessorCache<TState>.Processor;
+        if (processor != null)
+        {
+            processor(this, logLevel, eventId, ref state, exception);
+            return;
+        }
+
+        if (!Volatile.Read(ref OtlpProcessorCache<TState>.IsInitialized))
+        {
+            var populator = new CachePopulatorVisitor();
+            StructuredLogStateDispatcher.TryAccept(ref state, ref populator);
+
+            // The visitor only runs for generated states; mark other types too so they are never probed again.
+            Volatile.Write(ref OtlpProcessorCache<TState>.IsInitialized, true);
+        }
+
+        // Re-read: populated just now, or by another thread since the hot-path check.
+        processor = Volatile.Read(ref OtlpProcessorCache<TState>.Processor);
+        if (processor != null)
+        {
+            processor(this, logLevel, eventId, ref state, exception);
             return;
         }
 
         ProcessFallback(logLevel, eventId, state, exception, formatter);
+    }
+
+    /// <summary>Per-state-type cache of the structured processing entry point.</summary>
+    private static class OtlpProcessorCache<TState>
+    {
+        public delegate void ProcessDelegate(ZeroAllocOtlpLogger logger, LogLevel logLevel, EventId eventId, ref TState state, Exception? exception);
+
+        public static ProcessDelegate? Processor;
+
+        /// <summary>True once the type has been probed, so non-KetPsi states skip the probe afterwards.</summary>
+        public static bool IsInitialized;
+    }
+
+    /// <summary>Captures the concrete state type once and caches a delegate to <see cref="ProcessStructured{TStructuredState}"/>.</summary>
+    private readonly struct CachePopulatorVisitor : IStructuredLogStateVisitor
+    {
+        public void Visit<TActualState>(ref TActualState state) where TActualState : struct, IStructuredLogState, IDeferredUtf8Formatter
+        {
+            // Static lambda: captures nothing, so it is allocated once per state type and cached.
+            Volatile.Write(
+                ref OtlpProcessorCache<TActualState>.Processor,
+                static (ZeroAllocOtlpLogger l, LogLevel lvl, EventId eid, ref TActualState s, Exception? ex)
+                    => l.ProcessStructured(lvl, eid, ref s, ex));
+            Volatile.Write(ref OtlpProcessorCache<TActualState>.IsInitialized, true);
+        }
     }
 
     internal unsafe void ProcessStructured<TStructuredState>(
@@ -58,7 +130,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
     {
         long timeUnixNano = (DateTime.UtcNow.Ticks - DateTime.UnixEpoch.Ticks) * 100L;
         int severityNumber = MapLogLevelToOtlpSeverity(logLevel);
-        string severityText = MapLogLevelToSeverityText(logLevel);
+        ReadOnlySpan<byte> severityText = MapLogLevelToSeverityTextUtf8(logLevel);
 
         byte[]? pooledIds = null;
         Span<byte> traceId = default;
@@ -74,23 +146,42 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         }
 
         PooledByteBufferWriter? bodyWriter = null;
+        int[]? valueRanges = null;
+        // Values not taken from the body are formatted to UTF-8 once (size pass) and replayed by the encoder.
+        PooledByteBufferWriter valueArena = PooledByteBufferWriter.Rent(ref t_valueArena);
         try
         {
-            var sizeCalculator = new OtlpParameterSizeCalculator();
-            structuredState.WriteParameters(ref sizeCalculator);
+            // Without IncludeFormattedMessage the body is the (pre-encoded) template, like the OpenTelemetry SDK default.
+            bool renderBody = _provider.IncludeFormattedMessage;
+            ReadOnlySpan<byte> bodyUtf8;
+            BodyValues bodyValues = default;
+            if (renderBody)
+            {
+                // Render first, recording where each value lands: attributes reuse those bytes instead of
+                // formatting every value a second time.
+                bodyWriter = PooledByteBufferWriter.Rent(ref t_bodyWriter);
+                valueRanges = RentValueRanges(2 * structuredState.ParameterCount);
+                structuredState.FormatTo(bodyWriter, valueRanges);
+                bodyUtf8 = bodyWriter.WrittenSpan;
+                bodyValues = new BodyValues(bodyWriter, valueRanges);
+            }
+            else
+            {
+                bodyUtf8 = structuredState.OriginalFormatUtf8;
+            }
 
-            // Render body via zero-alloc UTF-8 path (generated states implement IDeferredUtf8Formatter).
-            bodyWriter = new PooledByteBufferWriter(256);
-            structuredState.FormatTo(bodyWriter);
-            ReadOnlySpan<byte> bodyUtf8 = bodyWriter.WrittenSpan;
+            var sizeCalculator = new OtlpParameterSizeCalculator { Arena = valueArena, Body = bodyValues };
+            structuredState.WriteParameters(ref sizeCalculator);
 
             // Standard enrichment attributes (category, event, exception, original format template)
             int enrichmentSize = 0;
-            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("logger".AsSpan(), _categoryName.AsSpan(), 6);
+            // Constant keys, the category and the generated template are already UTF-8.
+            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("logger"u8, _categoryUtf8, 6);
             // Keep the message template under the conventional .NET key
-            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}".AsSpan(), structuredState.OriginalFormat, 6);
+            if (renderBody)
+                enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
             if (eventId.Id != 0)
-                enrichmentSize += OtlpAttributeFormatter.CalculateInt64Size("event.id".AsSpan(), eventId.Id, 6);
+                enrichmentSize += OtlpAttributeFormatter.CalculateInt64Size("event.id"u8, eventId.Id, 6);
             if (!string.IsNullOrEmpty(eventId.Name))
                 enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("event.name".AsSpan(), eventId.Name.AsSpan(), 6);
             if (exception is not null)
@@ -128,10 +219,12 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
                     ref writer, timeUnixNano, severityNumber, severityText, bodyUtf8, traceId, spanId, eventName);
 
                 // Enrichment attributes first (advances writer.BytesWritten)
-                OtlpAttributeFormatter.WriteString(ref writer, "logger".AsSpan(), _categoryName.AsSpan(), 6);
-                OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}".AsSpan(), structuredState.OriginalFormat, 6);
+                OtlpAttributeFormatter.WriteString(ref writer, "logger"u8, _categoryUtf8, 6);
+                // When the body is the template, a {OriginalFormat} attribute would only duplicate it.
+                if (renderBody)
+                    OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
                 if (eventId.Id != 0)
-                    OtlpAttributeFormatter.WriteInt64(ref writer, "event.id".AsSpan(), eventId.Id, 6);
+                    OtlpAttributeFormatter.WriteInt64(ref writer, "event.id"u8, eventId.Id, 6);
                 if (!string.IsNullOrEmpty(eventId.Name))
                     OtlpAttributeFormatter.WriteString(ref writer, "event.name".AsSpan(), eventId.Name.AsSpan(), 6);
                 if (exception is not null)
@@ -146,7 +239,7 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
                 {
                     fixed (byte* ptr = reservedSpan)
                     {
-                        var encoder = new OtlpParameterEncoder(ptr, attrOffset, reservedSpan.Length);
+                        var encoder = new OtlpParameterEncoder(ptr, attrOffset, reservedSpan.Length, valueArena, bodyValues);
                         structuredState.WriteParameters(ref encoder);
                     }
                     attrOffset += sizeCalculator.TotalSize;
@@ -168,7 +261,9 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         }
         finally
         {
-            bodyWriter?.Dispose();
+            if (bodyWriter != null) PooledByteBufferWriter.Return(ref t_bodyWriter, bodyWriter);
+            if (valueRanges != null) t_valueRanges = valueRanges;
+            PooledByteBufferWriter.Return(ref t_valueArena, valueArena);
             if (pooledIds != null)
             {
                 ArrayPool<byte>.Shared.Return(pooledIds);
@@ -365,7 +460,8 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         var scopeProvider = _provider.ScopeProvider;
         if (scopeProvider is null) return 0;
 
-        var holder = new SizeHolder();
+        var holder = t_sizeHolder ??= new SizeHolder();
+        holder.Total = 0;
         scopeProvider.ForEachScope(static (scope, h) =>
         {
             h.Total += MeasureScope(scope);
@@ -414,12 +510,10 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         var scopeProvider = _provider.ScopeProvider;
         if (scopeProvider is null) return 0;
 
-        var ctx = new ScopeWriteContext
-        {
-            BufferBase = bufferBase,
-            BufferLength = bufferLength,
-            Offset = offset
-        };
+        var ctx = t_scopeWriteContext ??= new ScopeWriteContext();
+        ctx.BufferBase = bufferBase;
+        ctx.BufferLength = bufferLength;
+        ctx.Offset = offset;
         int start = offset;
 
         scopeProvider.ForEachScope(static (scope, c) =>
@@ -465,6 +559,12 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         return ctx.Offset - start;
     }
 
+    // Reused per thread: ForEachScope callbacks are synchronous, so one instance per thread suffices.
+    [ThreadStatic]
+    private static SizeHolder? t_sizeHolder;
+    [ThreadStatic]
+    private static ScopeWriteContext? t_scopeWriteContext;
+
     private sealed class SizeHolder
     {
         public int Total;
@@ -486,6 +586,17 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         LogLevel.Error => 17,
         LogLevel.Critical => 21,
         _ => 0
+    };
+
+    private static ReadOnlySpan<byte> MapLogLevelToSeverityTextUtf8(LogLevel logLevel) => logLevel switch
+    {
+        LogLevel.Trace => "Trace"u8,
+        LogLevel.Debug => "Debug"u8,
+        LogLevel.Information => "Information"u8,
+        LogLevel.Warning => "Warning"u8,
+        LogLevel.Error => "Error"u8,
+        LogLevel.Critical => "Fatal"u8,
+        _ => "Information"u8
     };
 
     private static string MapLogLevelToSeverityText(LogLevel logLevel) => logLevel switch

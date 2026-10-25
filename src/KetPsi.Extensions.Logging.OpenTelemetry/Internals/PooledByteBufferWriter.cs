@@ -5,7 +5,7 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry.Internals;
 /// <summary>
 /// Minimal IBufferWriter over ArrayPool for one-shot UTF-8 rendering. Not thread-safe.
 /// </summary>
-internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
+internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, KetPsi.Extensions.Logging.Abstractions.IPositionedBufferWriter, IDisposable
 {
     private byte[]? _buffer;
     private int _index;
@@ -17,6 +17,10 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
     }
 
     public ReadOnlySpan<byte> WrittenSpan => _buffer.AsSpan(0, _index);
+
+    public int WrittenCount => _index;
+
+    internal Span<byte> GetWrittenSpanMutable() => _buffer.AsSpan(0, _index);
 
     public void Advance(int count)
     {
@@ -40,6 +44,27 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
 
     public void Reset() => _index = 0;
 
+    private const int MaxCachedSize = 64 * 1024;
+
+    /// <summary>
+    /// Takes the writer cached in <paramref name="slot"/> (creating one if empty) and clears the slot,
+    /// so a nested user on the same thread gets its own writer instead of corrupting this one.
+    /// </summary>
+    public static PooledByteBufferWriter Rent(ref PooledByteBufferWriter? slot)
+    {
+        var writer = slot ?? new PooledByteBufferWriter(256);
+        slot = null;
+        writer.Reset();
+        return writer;
+    }
+
+    /// <summary>Puts <paramref name="writer"/> back into <paramref name="slot"/>; oversized buffers go back to the pool instead.</summary>
+    public static void Return(ref PooledByteBufferWriter? slot, PooledByteBufferWriter writer)
+    {
+        if (writer._buffer is { Length: <= MaxCachedSize }) slot = writer;
+        else writer.Dispose();
+    }
+
     public void Dispose()
     {
         if (_buffer is not null)
@@ -52,7 +77,8 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
     private void CheckAndResize(int sizeHint)
     {
         if (_buffer is null) throw new ObjectDisposedException(nameof(PooledByteBufferWriter));
-        if (sizeHint < 0) sizeHint = 0;
+        // IBufferWriter contract: GetSpan(0) must still return a non-empty span.
+        if (sizeHint <= 0) sizeHint = 1;
         int available = _buffer.Length - _index;
         if (sizeHint <= available) return;
 

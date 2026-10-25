@@ -44,18 +44,18 @@ internal sealed class ZeroAllocationConsoleLogger(
         var node = ScopeNodePool.Rent();
         node.Parent = ScopeContext.Current;
 
-        if (ScopeFormatterCache<TState>.FormatDeferred != null)
+        // Generated states render through the AOT-safe dispatcher (no reflection, no boxing).
+        if (!StructuredLogStateDispatcher.TryFormatTo(ref state, node.Buffer))
         {
-            ScopeFormatterCache<TState>.FormatDeferred(state, node.Buffer);
-        }
-        else if (typeof(TState) == typeof(string))
-        {
-            string str = System.Runtime.CompilerServices.Unsafe.As<TState, string>(ref System.Runtime.CompilerServices.Unsafe.AsRef(in state));
-            WriteString(node.Buffer, str);
-        }
-        else
-        {
-            WriteString(node.Buffer, state.ToString() ?? string.Empty);
+            if (typeof(TState) == typeof(string))
+            {
+                string str = System.Runtime.CompilerServices.Unsafe.As<TState, string>(ref System.Runtime.CompilerServices.Unsafe.AsRef(in state));
+                WriteString(node.Buffer, str);
+            }
+            else
+            {
+                WriteString(node.Buffer, state.ToString() ?? string.Empty);
+            }
         }
 
         ScopeContext.Current = node;
@@ -68,28 +68,5 @@ internal sealed class ZeroAllocationConsoleLogger(
         int maxBytes = System.Text.Encoding.UTF8.GetMaxByteCount(value.Length);
         int written = System.Text.Encoding.UTF8.GetBytes(value, buffer.GetSpan(maxBytes));
         buffer.Advance(written);
-    }
-}
-internal static class ScopeFormatterCache<TState>
-{
-    public static readonly Action<TState, IBufferWriter<byte>>? FormatDeferred;
-
-    static ScopeFormatterCache()
-    {
-        if (typeof(IDeferredUtf8Formatter).IsAssignableFrom(typeof(TState)))
-        {
-            var method = typeof(ScopeFormatterCache<TState>)
-                .GetMethod(nameof(FormatInternal), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
-                .MakeGenericMethod(typeof(TState));
-
-            FormatDeferred = (Action<TState, IBufferWriter<byte>>)Delegate.CreateDelegate(typeof(Action<TState, IBufferWriter<byte>>), method);
-        }
-    }
-
-    // Because this method is constrained (where TActual : IDeferredUtf8Formatter), 
-    // invoking FormatTo does NOT box the struct!
-    private static void FormatInternal<TActual>(TActual state, IBufferWriter<byte> writer) where TActual : IDeferredUtf8Formatter
-    {
-        state.FormatTo(writer);
     }
 }

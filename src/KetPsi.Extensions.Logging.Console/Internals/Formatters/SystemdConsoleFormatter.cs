@@ -31,8 +31,7 @@ internal sealed class SystemdConsoleFormatter : IZeroAllocConsoleFormatter
 
         buffer.Write(": "u8);
 
-        if (state is IDeferredUtf8Formatter deferredFormatter) deferredFormatter.FormatTo(buffer);
-        else
+        if (!StructuredLogStateDispatcher.TryFormatTo(ref state, buffer))
         {
             string msg = formatter(state, exception);
             int maxMsgBytes = System.Text.Encoding.UTF8.GetMaxByteCount(msg.Length);

@@ -61,6 +61,15 @@ internal ref struct ZeroAllocProtobufWriter
         BytesWritten += byteCount;
     }
 
+    /// <summary>Writes a string whose UTF-8 byte count the caller already computed (skips a second count).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WriteString(uint fieldNumber, scoped ReadOnlySpan<char> value, int utf8ByteCount)
+    {
+        WriteTag(fieldNumber, 2);
+        WriteVarInt((ulong)utf8ByteCount);
+        BytesWritten += Encoding.UTF8.GetBytes(value, _buffer.Slice(BytesWritten));
+    }
+
     public void WriteBytes(uint fieldNumber, scoped ReadOnlySpan<byte> value)
     {
         WriteTag(fieldNumber, 2); // WireType 2 = Length-Delimited
