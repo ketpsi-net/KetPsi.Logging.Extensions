@@ -67,18 +67,58 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
             return;
         }
 
-        // Generated KetPsi states are dispatched with their concrete type (no boxing, no reflection; NativeAOT-safe).
-        var visitor = new StructuredStateVisitor(this, logLevel, eventId, exception);
-        if (StructuredLogStateDispatcher.TryAccept(ref state, ref visitor)) return;
+        // Generated KetPsi states: hot path is a cached delegate bound to the concrete state type (no boxing,
+        // no reflection, NativeAOT-safe). The visitor double dispatch only runs once per type to populate it.
+        var processor = OtlpProcessorCache<TState>.Processor;
+        if (processor != null)
+        {
+            processor(this, logLevel, eventId, ref state, exception);
+            return;
+        }
+
+        if (!Volatile.Read(ref OtlpProcessorCache<TState>.IsInitialized))
+        {
+            var populator = new CachePopulatorVisitor();
+            StructuredLogStateDispatcher.TryAccept(ref state, ref populator);
+
+            // The visitor only runs for generated states; mark other types too so they are never probed again.
+            Volatile.Write(ref OtlpProcessorCache<TState>.IsInitialized, true);
+        }
+
+        // Re-read: populated just now, or by another thread since the hot-path check.
+        processor = Volatile.Read(ref OtlpProcessorCache<TState>.Processor);
+        if (processor != null)
+        {
+            processor(this, logLevel, eventId, ref state, exception);
+            return;
+        }
 
         ProcessFallback(logLevel, eventId, state, exception, formatter);
     }
 
-    private readonly struct StructuredStateVisitor(
-        ZeroAllocOtlpLogger logger, LogLevel logLevel, EventId eventId, Exception? exception) : IStructuredLogStateVisitor
+    /// <summary>Per-state-type cache of the structured processing entry point.</summary>
+    private static class OtlpProcessorCache<TState>
     {
-        public void Visit<TState>(ref TState state) where TState : struct, IStructuredLogState, IDeferredUtf8Formatter
-            => logger.ProcessStructured(logLevel, eventId, ref state, exception);
+        public delegate void ProcessDelegate(ZeroAllocOtlpLogger logger, LogLevel logLevel, EventId eventId, ref TState state, Exception? exception);
+
+        public static ProcessDelegate? Processor;
+
+        /// <summary>True once the type has been probed, so non-KetPsi states skip the probe afterwards.</summary>
+        public static bool IsInitialized;
+    }
+
+    /// <summary>Captures the concrete state type once and caches a delegate to <see cref="ProcessStructured{TStructuredState}"/>.</summary>
+    private readonly struct CachePopulatorVisitor : IStructuredLogStateVisitor
+    {
+        public void Visit<TActualState>(ref TActualState state) where TActualState : struct, IStructuredLogState, IDeferredUtf8Formatter
+        {
+            // Static lambda: captures nothing, so it is allocated once per state type and cached.
+            Volatile.Write(
+                ref OtlpProcessorCache<TActualState>.Processor,
+                static (ZeroAllocOtlpLogger l, LogLevel lvl, EventId eid, ref TActualState s, Exception? ex)
+                    => l.ProcessStructured(lvl, eid, ref s, ex));
+            Volatile.Write(ref OtlpProcessorCache<TActualState>.IsInitialized, true);
+        }
     }
 
     internal unsafe void ProcessStructured<TStructuredState>(

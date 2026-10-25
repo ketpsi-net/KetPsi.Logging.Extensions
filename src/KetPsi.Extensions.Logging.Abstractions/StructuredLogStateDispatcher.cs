@@ -45,11 +45,47 @@ public static class StructuredLogStateDispatcher
     }
 
     /// <summary>Renders the message of a generated state as UTF-8. Returns <see langword="false"/> for any other state type.</summary>
+    /// <remarks>
+    /// The hot path is a static field read plus a delegate call. The visitor double dispatch (a generic virtual
+    /// call) runs once per state type, in <see cref="InitializeAndFormatTo{TState}"/>, to populate the cache.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool TryFormatTo<TState>(ref TState state, IBufferWriter<byte> writer)
     {
-        var visitor = new FormatToVisitor(writer);
-        return TryAccept(ref state, ref visitor);
+        var formatter = FormatToCache<TState>.Formatter;
+        if (formatter != null)
+        {
+            formatter(ref state, writer);
+            return true;
+        }
+
+        // Already probed and not a generated KetPsi state: don't probe again.
+        if (Volatile.Read(ref FormatToCache<TState>.IsInitialized))
+            return TryFormatToCached(ref state, writer);
+
+        return InitializeAndFormatTo(ref state, writer);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool InitializeAndFormatTo<TState>(ref TState state, IBufferWriter<byte> writer)
+    {
+        var populator = new FormatToPopulatorVisitor();
+        TryAccept(ref state, ref populator);
+
+        // The visitor only runs for generated states; mark other types too so they are never probed again.
+        Volatile.Write(ref FormatToCache<TState>.IsInitialized, true);
+
+        return TryFormatToCached(ref state, writer);
+    }
+
+    // Re-read with acquire semantics: another thread may have populated the cache since the hot-path check.
+    private static bool TryFormatToCached<TState>(ref TState state, IBufferWriter<byte> writer)
+    {
+        var formatter = Volatile.Read(ref FormatToCache<TState>.Formatter);
+        if (formatter is null) return false;
+
+        formatter(ref state, writer);
+        return true;
     }
 
     private sealed class Dispatcher<TState> : StructuredLogStateDispatcher<TState> where TState : struct, IStructuredLogState, IDeferredUtf8Formatter
@@ -57,9 +93,27 @@ public static class StructuredLogStateDispatcher
         public override void Accept<TVisitor>(ref TState state, ref TVisitor visitor) => visitor.Visit(ref state);
     }
 
-    private readonly struct FormatToVisitor(IBufferWriter<byte> writer) : IStructuredLogStateVisitor
+    /// <summary>Per-state-type cache for <see cref="TryFormatTo{TState}"/>.</summary>
+    private static class FormatToCache<TState>
     {
-        public void Visit<TState>(ref TState state) where TState : struct, IStructuredLogState, IDeferredUtf8Formatter
-            => state.FormatTo(writer);
+        public delegate void FormatToDelegate(ref TState state, IBufferWriter<byte> writer);
+
+        public static FormatToDelegate? Formatter;
+
+        /// <summary>True once the type has been probed, so non-KetPsi states skip the probe afterwards.</summary>
+        public static bool IsInitialized;
+    }
+
+    /// <summary>Captures the concrete state type once and caches a constrained (boxing-free) FormatTo call for it.</summary>
+    private readonly struct FormatToPopulatorVisitor : IStructuredLogStateVisitor
+    {
+        public void Visit<TActualState>(ref TActualState state) where TActualState : struct, IStructuredLogState, IDeferredUtf8Formatter
+        {
+            // Static lambda: no captured state, so the delegate is allocated once per state type and cached.
+            Volatile.Write(
+                ref FormatToCache<TActualState>.Formatter,
+                static (ref TActualState s, IBufferWriter<byte> w) => s.FormatTo(w));
+            Volatile.Write(ref FormatToCache<TActualState>.IsInitialized, true);
+        }
     }
 }
