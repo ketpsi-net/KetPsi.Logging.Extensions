@@ -146,36 +146,28 @@ public class OtlpParameterSizeCalculatorAndEncoderTests
     // ------------------------------------------------------------------
 
     [Fact]
-    public void SizeCalculator_Guid_UsesSpanFormattableHelper()
+    public void SizeCalculator_Guid_UsesRegisteredFormatter()
     {
-        // Guid implements ISpanFormattable → FormatterDispatcher<Guid>.Helper != null
-        Assert.NotNull(FormatterDispatcher<Guid>.Helper);
+        // Guid is pre-registered, so it is formatted without boxing or reflection
+        Assert.NotNull(LogValueFormatter<Guid>.Default);
 
         var guid = Guid.Parse("12345678-1234-1234-1234-123456789abc");
         var calc = new OtlpParameterSizeCalculator();
         calc.Write(new LogParameter<Guid>("id", guid));
 
-        // Helper defaults to fieldNumber = 6
-        int expected = FormatterDispatcher<Guid>.Helper!
-            .CalculateSize("id".AsSpan(), ref guid, fieldNumber: 6);
-
-        Assert.Equal(expected, calc.TotalSize);
-        Assert.True(calc.TotalSize > 0);
+        Assert.Equal(ExpectedStringSize("id", guid.ToString()), calc.TotalSize);
     }
 
     [Fact]
-    public void SizeCalculator_DateTime_UsesSpanFormattableHelper()
+    public void SizeCalculator_DateTime_UsesRegisteredFormatter()
     {
-        Assert.NotNull(FormatterDispatcher<DateTime>.Helper);
+        Assert.NotNull(LogValueFormatter<DateTime>.Default);
 
         var dt = new DateTime(2024, 1, 15, 12, 30, 0, DateTimeKind.Utc);
         var calc = new OtlpParameterSizeCalculator();
         calc.Write(new LogParameter<DateTime>("timestamp", dt));
 
-        int expected = FormatterDispatcher<DateTime>.Helper!
-            .CalculateSize("timestamp".AsSpan(), ref dt, fieldNumber: 6);
-
-        Assert.Equal(expected, calc.TotalSize);
+        Assert.Equal(ExpectedStringSize("timestamp", dt.ToString()), calc.TotalSize);
     }
 
     // ------------------------------------------------------------------
@@ -191,7 +183,7 @@ public class OtlpParameterSizeCalculatorAndEncoderTests
     public void SizeCalculator_CustomType_FallsBackToToString()
     {
         // CustomType does not implement ISpanFormattable
-        Assert.Null(FormatterDispatcher<CustomType>.Helper);
+        Assert.Null(LogValueFormatter<CustomType>.Default);
 
         var value = new CustomType();
         var calc = new OtlpParameterSizeCalculator();
@@ -211,42 +203,32 @@ public class OtlpParameterSizeCalculatorAndEncoderTests
     }
 
     // ------------------------------------------------------------------
-    // SpanFormattableWrapperHelper – direct tests
+    // OtlpStringValue – direct tests
     // ------------------------------------------------------------------
 
     [Fact]
-    public void SpanFormattableHelper_Guid_SizeAndWriteMatch()
+    public void OtlpStringValue_Guid_SizeAndWriteMatch()
     {
-        var helper = new SpanFormattableWrapperHelper<Guid>();
         var guid = Guid.NewGuid();
 
-        int size = helper.CalculateSize("g".AsSpan(), ref guid, fieldNumber: 1);
+        int size = OtlpStringValue.CalculateSize("g".AsSpan(), in guid, fieldNumber: 1);
 
         Span<byte> buffer = stackalloc byte[256];
         var writer = new ZeroAllocProtobufWriter(buffer);
-        helper.Write(ref writer, "g".AsSpan(), ref guid, fieldNumber: 1);
+        OtlpStringValue.Write(ref writer, "g".AsSpan(), in guid, fieldNumber: 1);
 
         Assert.Equal(size, writer.BytesWritten);
     }
 
     [Fact]
-    public void SpanFormattableHelper_DefaultFieldNumberIs6()
+    public void OtlpStringValue_LargeValue_GrowsBeyondStackBuffer()
     {
-        var helper = new SpanFormattableWrapperHelper<Guid>();
-        var guid = Guid.NewGuid();
+        var value = new System.Text.StringBuilder().Append('x', 5000).ToString();
 
-        int sizeField6 = helper.CalculateSize("g".AsSpan(), ref guid);          // default = 6
-        int sizeField1 = helper.CalculateSize("g".AsSpan(), ref guid, 1);
+        int size = OtlpStringValue.CalculateSize("big".AsSpan(), in value, fieldNumber: 6);
 
-        // Field 6 still fits in a single-byte tag, so sizes are identical for this range,
-        // but the call sites are different – just verify both succeed.
-        Assert.True(sizeField6 > 0);
-        Assert.True(sizeField1 > 0);
+        Assert.Equal(ExpectedStringSize("big", value), size);
     }
-
-    // ------------------------------------------------------------------
-    // OtlpParameterEncoder – size matches calculator
-    // ------------------------------------------------------------------
 
     [Fact]
     public unsafe void Encoder_Long_MatchesSizeCalculator()
@@ -347,45 +329,36 @@ public class OtlpParameterSizeCalculatorAndEncoderTests
         }
 
         // Cross-check with the helper directly (fieldNumber = 6, as used by the helper default)
-        var helper = FormatterDispatcher<Guid>.Helper!;
         Span<byte> expectedBuf = stackalloc byte[256];
         var expectedWriter = new ZeroAllocProtobufWriter(expectedBuf);
-        helper.Write(ref expectedWriter, "correlation".AsSpan(), ref guid); // default field 6
+        OtlpStringValue.Write(ref expectedWriter, "correlation".AsSpan(), in guid, fieldNumber: 6);
 
         Assert.Equal(calc.TotalSize, expectedWriter.BytesWritten);
     }
 
     // ------------------------------------------------------------------
-    // FormatterDispatcher
+    // LogValueFormatter registry
     // ------------------------------------------------------------------
 
     [Fact]
-    public void FormatterDispatcher_Guid_HasHelper()
+    public void LogValueFormatter_BuiltInValueTypes_AreRegistered()
     {
-        Assert.NotNull(FormatterDispatcher<Guid>.Helper);
-        Assert.IsType<SpanFormattableWrapperHelper<Guid>>(FormatterDispatcher<Guid>.Helper);
+        Assert.NotNull(LogValueFormatter<Guid>.Default);
+        Assert.NotNull(LogValueFormatter<DateTime>.Default);
+        Assert.NotNull(LogValueFormatter<decimal>.Default);
     }
 
     [Fact]
-    public void FormatterDispatcher_DateTime_HasHelper()
+    public void LogValueFormatter_String_HasNoFormatter()
     {
-        Assert.NotNull(FormatterDispatcher<DateTime>.Helper);
+        // string is handled by a dedicated fast path, not through the registry
+        Assert.Null(LogValueFormatter<string>.Default);
     }
 
     [Fact]
-    public void FormatterDispatcher_String_HasNoHelper()
+    public void LogValueFormatter_CustomType_HasNoFormatter()
     {
-        // string is handled by the specialized path, not via ISpanFormattable helper
-        // (even though string implements ISpanFormattable, the calculator checks typeof(string) first)
-        // FormatterDispatcher itself still creates a helper because string : ISpanFormattable
-        // This documents the actual behaviour.
-        Assert.Null(FormatterDispatcher<string>.Helper);
-    }
-
-    [Fact]
-    public void FormatterDispatcher_CustomType_HasNoHelper()
-    {
-        Assert.Null(FormatterDispatcher<CustomType>.Helper);
+        Assert.Null(LogValueFormatter<CustomType>.Default);
     }
 
     // ------------------------------------------------------------------
