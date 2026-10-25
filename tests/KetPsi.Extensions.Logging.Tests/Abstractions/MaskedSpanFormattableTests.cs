@@ -16,13 +16,9 @@ namespace Abstractions
         [Fact]
         public void FormatTo_NullString_WritesEmpty()
         {
-            // T = string, value = null → Unsafe.As will produce null, then NullReferenceException
-            // The current implementation does not guard against null string.
-            // Document the behaviour (or fix the production code).
             var m = new MaskedSpanFormattable<string>(null!, 0, 5);
 
-            // Expect either empty or exception – current code throws.
-            Assert.ThrowsAny<Exception>(() => TestHelpers.FormatToString(m));
+            Assert.Equal(string.Empty, TestHelpers.FormatToString(m));
         }
 
         [Fact]
