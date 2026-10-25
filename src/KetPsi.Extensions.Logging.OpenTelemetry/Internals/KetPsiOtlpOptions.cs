@@ -14,5 +14,8 @@
         public int QueueCapacity { get; set; } = 1024;
 
         public Dictionary<string, string> Resources { get; set; } = [];
+
+        /// <summary>Rendered message (true) or message template (false) as the log body.</summary>
+        public bool IncludeFormattedMessage { get; set; } = true;
     }
 }

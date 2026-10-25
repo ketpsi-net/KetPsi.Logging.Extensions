@@ -104,13 +104,24 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
         PooledByteBufferWriter valueArena = PooledByteBufferWriter.Rent(ref t_valueArena);
         try
         {
-            // Render first, recording where each value lands: attributes reuse those bytes instead of
-            // formatting every value a second time.
-            bodyWriter = PooledByteBufferWriter.Rent(ref t_bodyWriter);
-            valueRanges = RentValueRanges(2 * structuredState.ParameterCount);
-            structuredState.FormatTo(bodyWriter, valueRanges);
-            ReadOnlySpan<byte> bodyUtf8 = bodyWriter.WrittenSpan;
-            var bodyValues = new BodyValues(bodyWriter, valueRanges);
+            // Without IncludeFormattedMessage the body is the (pre-encoded) template, like the OpenTelemetry SDK default.
+            bool renderBody = _provider.IncludeFormattedMessage;
+            ReadOnlySpan<byte> bodyUtf8;
+            BodyValues bodyValues = default;
+            if (renderBody)
+            {
+                // Render first, recording where each value lands: attributes reuse those bytes instead of
+                // formatting every value a second time.
+                bodyWriter = PooledByteBufferWriter.Rent(ref t_bodyWriter);
+                valueRanges = RentValueRanges(2 * structuredState.ParameterCount);
+                structuredState.FormatTo(bodyWriter, valueRanges);
+                bodyUtf8 = bodyWriter.WrittenSpan;
+                bodyValues = new BodyValues(bodyWriter, valueRanges);
+            }
+            else
+            {
+                bodyUtf8 = structuredState.OriginalFormatUtf8;
+            }
 
             var sizeCalculator = new OtlpParameterSizeCalculator { Arena = valueArena, Body = bodyValues };
             structuredState.WriteParameters(ref sizeCalculator);
@@ -120,7 +131,8 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
             // Constant keys, the category and the generated template are already UTF-8.
             enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("logger"u8, _categoryUtf8, 6);
             // Keep the message template under the conventional .NET key
-            enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
+            if (renderBody)
+                enrichmentSize += OtlpAttributeFormatter.CalculateStringSize("{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
             if (eventId.Id != 0)
                 enrichmentSize += OtlpAttributeFormatter.CalculateInt64Size("event.id"u8, eventId.Id, 6);
             if (!string.IsNullOrEmpty(eventId.Name))
@@ -161,7 +173,9 @@ internal sealed class ZeroAllocOtlpLogger : ILogger
 
                 // Enrichment attributes first (advances writer.BytesWritten)
                 OtlpAttributeFormatter.WriteString(ref writer, "logger"u8, _categoryUtf8, 6);
-                OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
+                // When the body is the template, a {OriginalFormat} attribute would only duplicate it.
+                if (renderBody)
+                    OtlpAttributeFormatter.WriteString(ref writer, "{OriginalFormat}"u8, structuredState.OriginalFormatUtf8, 6);
                 if (eventId.Id != 0)
                     OtlpAttributeFormatter.WriteInt64(ref writer, "event.id"u8, eventId.Id, 6);
                 if (!string.IsNullOrEmpty(eventId.Name))

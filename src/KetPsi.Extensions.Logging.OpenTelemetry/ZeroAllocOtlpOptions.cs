@@ -7,6 +7,13 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
         IZeroAllocOtlpOptionsBuilder SetBatchSizeLimit(int batchSizeLimit);
 
         IZeroAllocOtlpOptionsBuilder ConfigureResource(Dictionary<string, string> resources);
+
+        /// <summary>
+        /// When <see langword="true"/> (default) the log body is the rendered message. When <see langword="false"/>
+        /// the body is the message template, as the OpenTelemetry .NET SDK sends by default, which skips rendering
+        /// the message on the calling thread (attributes still carry every value).
+        /// </summary>
+        IZeroAllocOtlpOptionsBuilder IncludeFormattedMessage(bool include = true);
     }
     internal class ZeroAllocOtlpOptionsBuilder : IZeroAllocOtlpOptionsBuilder
     {
@@ -51,6 +58,12 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
             return this;
         }
 
+        public IZeroAllocOtlpOptionsBuilder IncludeFormattedMessage(bool include = true)
+        {
+            _options.IncludeFormattedMessage = include;
+            return this;
+        }
+
         public IZeroAllocOtlpOptionsBuilder UseEndpoint(string endpoint)
         {
             _options.Endpoint = endpoint;
@@ -75,6 +88,9 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
     {
         public string? Endpoint { get; set; }
         public int BatchSizeLimit { get; set; }
+
+        /// <summary>Null when not set in code (the appsettings value, or the default, applies).</summary>
+        public bool? IncludeFormattedMessage { get; set; }
 
         public byte[] Resources { get; set; } = [];
     }

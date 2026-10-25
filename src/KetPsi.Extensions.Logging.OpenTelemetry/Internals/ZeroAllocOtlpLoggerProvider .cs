@@ -12,10 +12,14 @@ internal sealed class ZeroAllocOtlpLoggerProvider : ILoggerProvider, ISupportExt
 
     public OtlpBatcher Batcher => _batcher;
 
-    public ZeroAllocOtlpLoggerProvider(HttpClient httpClient, int queueCapacity, byte[] resources)
+    public ZeroAllocOtlpLoggerProvider(HttpClient httpClient, int queueCapacity, byte[] resources, bool includeFormattedMessage = true)
     {
         _batcher = new OtlpBatcher(httpClient, queueCapacity, resources);
+        IncludeFormattedMessage = includeFormattedMessage;
     }
+
+    /// <summary>Rendered message (true) or message template (false) as the log body.</summary>
+    public bool IncludeFormattedMessage { get; }
 
     public ILogger CreateLogger(string categoryName)
     {

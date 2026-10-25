@@ -55,7 +55,8 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
                     BaseAddress = new Uri(string.IsNullOrEmpty(otlp.Endpoint) ? opt.Endpoint : otlp.Endpoint)
                 };
 
-                return new ZeroAllocOtlpLoggerProvider(client, opt.QueueCapacity, otlp.Resources);
+                return new ZeroAllocOtlpLoggerProvider(client, opt.QueueCapacity, otlp.Resources,
+                    otlp.IncludeFormattedMessage ?? opt.IncludeFormattedMessage);
             }));
 
             return builder;
