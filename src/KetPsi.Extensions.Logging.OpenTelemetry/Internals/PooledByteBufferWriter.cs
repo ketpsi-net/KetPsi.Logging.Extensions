@@ -52,7 +52,8 @@ internal sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
     private void CheckAndResize(int sizeHint)
     {
         if (_buffer is null) throw new ObjectDisposedException(nameof(PooledByteBufferWriter));
-        if (sizeHint < 0) sizeHint = 0;
+        // IBufferWriter contract: GetSpan(0) must still return a non-empty span.
+        if (sizeHint <= 0) sizeHint = 1;
         int available = _buffer.Length - _index;
         if (sizeHint <= available) return;
 
