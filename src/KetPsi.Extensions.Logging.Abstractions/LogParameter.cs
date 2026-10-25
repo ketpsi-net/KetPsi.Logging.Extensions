@@ -9,6 +9,15 @@ public readonly struct LogParameter<T>(string? name, T value, string? format = n
     public readonly T Value = value;
     public readonly string? Format = format;
 
+    /// <summary>The name pre-encoded as UTF-8 (set by generated code) so sinks never transcode it per log.</summary>
+    public readonly byte[]? NameUtf8;
+
+    public LogParameter(string? name, byte[]? nameUtf8, T value, string? format = null)
+        : this(name, value, format)
+    {
+        NameUtf8 = nameUtf8;
+    }
+
     [ThreadStatic]
     private static ArrayBufferWriter<byte>? t_alignBuffer;
 

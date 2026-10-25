@@ -378,7 +378,10 @@ public class SimpleConsoleFormatterTests : IDisposable
         private readonly string _m;
         public DeferredMsg(string m) => _m = m;
         public ReadOnlySpan<char> OriginalFormat => _m;
+        public ReadOnlySpan<byte> OriginalFormatUtf8 => Encoding.UTF8.GetBytes(_m);
         public void WriteParameters<TWriter>(ref TWriter writer) where TWriter : struct, ILogParameterWriter { }
+        public int ParameterCount => 0;
+        public void FormatTo(IPositionedBufferWriter w, int[] valueRanges) => FormatTo(w);
         public void FormatTo(IBufferWriter<byte> w)
         {
             var b = Encoding.UTF8.GetBytes(_m);

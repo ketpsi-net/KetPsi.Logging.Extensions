@@ -35,11 +35,22 @@ public readonly struct JsonLogValue<T>(T? value, JsonTypeInfo<T>? typeInfo = nul
             return;
         }
 
-        var state = t_state ??= new WriterState();
+        // The same value is rendered for the message body and again for sink attributes;
+        // serialize once per log and copy the cached UTF-8 afterwards.
+        writer.Write(GetUtf8());
+    }
 
-        // Re-point the JSON writer DIRECTLY to the provided console stream buffer!
-        state.Writer.Reset(writer);
-        Serialize(state.Writer);
+    private ReadOnlySpan<byte> GetUtf8()
+    {
+        var state = t_state ??= new WriterState();
+        if (state.CachedOperationId != _operationId)
+        {
+            state.Buffer.Clear();
+            state.Writer.Reset(state.Buffer);
+            Serialize(state.Writer);
+            state.CachedOperationId = _operationId;
+        }
+        return state.Buffer.WrittenSpan;
     }
 
     private void Serialize(Utf8JsonWriter writer)
@@ -79,20 +90,8 @@ public readonly struct JsonLogValue<T>(T? value, JsonTypeInfo<T>? typeInfo = nul
             return true;
         }
 
-        var state = t_state ??= new WriterState();
-
-        if (state.CachedOperationId != _operationId)
-        {
-            state.Buffer.Clear();
-            state.Writer.Reset(state.Buffer);
-
-            Serialize(state.Writer);
-
-            state.CachedOperationId = _operationId;
-        }
-
         var status = System.Text.Unicode.Utf8.ToUtf16(
-            source: state.Buffer.WrittenSpan,
+            source: GetUtf8(),
             destination: destination,
             out _,
             out charsWritten,

@@ -23,6 +23,10 @@ public abstract class LogValueFormatter<T>
 
     /// <summary>Formats <paramref name="value"/> as UTF-16. Returns <see langword="false"/> when <paramref name="destination"/> is too small.</summary>
     public abstract bool TryFormat(in T value, Span<char> destination, out int charsWritten, string? format);
+
+    /// <summary>Formats <paramref name="value"/> as UTF-8. Returns <see langword="false"/> when <paramref name="utf8Destination"/> is too small.</summary>
+    public virtual bool TryFormatUtf8(in T value, Span<byte> utf8Destination, out int bytesWritten, string? format)
+        => LogValueFormatter.TryFormatUtf8ViaChars(this, in value, utf8Destination, out bytesWritten, format);
 }
 
 /// <summary>
@@ -83,6 +87,48 @@ public static class LogValueFormatter
             return formatter.TryFormat(in value, destination, out charsWritten, format);
 
         return TryFormatFallback(in value, destination, out charsWritten, format);
+    }
+
+    /// <summary>Formats <paramref name="value"/> as UTF-8. Returns <see langword="false"/> when <paramref name="utf8Destination"/> is too small.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool TryFormatUtf8<T>(in T value, Span<byte> utf8Destination, out int bytesWritten, string? format)
+    {
+        if (typeof(T) == typeof(string))
+        {
+            string? s = Unsafe.As<T, string?>(ref Unsafe.AsRef(in value));
+            return Utf8.FromUtf16(s.AsSpan(), utf8Destination, out _, out bytesWritten) == OperationStatus.Done;
+        }
+
+        var formatter = LogValueFormatter<T>.Default;
+        if (formatter != null)
+            return formatter.TryFormatUtf8(in value, utf8Destination, out bytesWritten, format);
+
+        if (!typeof(T).IsValueType && value is IUtf8SpanFormattable utf8)
+            return utf8.TryFormat(utf8Destination, out bytesWritten, format, null);
+
+        return TryFormatUtf8ViaChars(null, in value, utf8Destination, out bytesWritten, format);
+    }
+
+    internal static bool TryFormatUtf8ViaChars<T>(LogValueFormatter<T>? formatter, in T value, Span<byte> utf8Destination, out int bytesWritten, string? format)
+    {
+        bytesWritten = 0;
+        // A UTF-8 destination of N bytes can never need more than N UTF-16 chars.
+        int charCapacity = Math.Min(utf8Destination.Length, MaxFormatBufferSize);
+        char[]? rented = null;
+        Span<char> chars = charCapacity <= StackCharLimit ? stackalloc char[StackCharLimit] : (rented = ArrayPool<char>.Shared.Rent(charCapacity));
+        try
+        {
+            int charsWritten;
+            bool ok = formatter != null
+                ? formatter.TryFormat(in value, chars, out charsWritten, format)
+                : TryFormat(in value, chars, out charsWritten, format);
+            if (!ok) return false;
+            return Utf8.FromUtf16(chars[..charsWritten], utf8Destination, out _, out bytesWritten) == OperationStatus.Done;
+        }
+        finally
+        {
+            if (rented != null) ArrayPool<char>.Shared.Return(rented);
+        }
     }
 
     // Unregistered types. Reference types hit the interface checks without allocating;
@@ -234,6 +280,9 @@ public static class LogValueFormatter
 
         public override bool TryFormat(in T value, Span<char> destination, out int charsWritten, string? format)
             => value.TryFormat(destination, out charsWritten, format, null);
+
+        public override bool TryFormatUtf8(in T value, Span<byte> utf8Destination, out int bytesWritten, string? format)
+            => value.TryFormat(utf8Destination, out bytesWritten, format, null);
     }
 
     private sealed class SpanFormattableFormatter<T> : LogValueFormatter<T> where T : struct, ISpanFormattable
@@ -249,6 +298,8 @@ public static class LogValueFormatter
 
     private sealed class Utf8FormattableFormatter<T> : LogValueFormatter<T> where T : struct, IUtf8SpanFormattable
     {
+        public override bool TryFormatUtf8(in T value, Span<byte> utf8Destination, out int bytesWritten, string? format)
+            => value.TryFormat(utf8Destination, out bytesWritten, format, null);
 
         public override void FormatTo(in T value, IBufferWriter<byte> writer, string? format)
         {

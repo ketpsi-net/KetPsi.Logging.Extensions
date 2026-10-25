@@ -477,6 +477,11 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
         string structName = $"LogState_{id}";
         string template = Literal(call.OriginalFormat);
 
+        // Parameter names pre-encoded as UTF-8 once, so sinks never transcode them per log.
+        foreach (var arg in args)
+            sb.AppendLine($"        private static readonly byte[] __name_{id}_{arg.Index} = {Literal(arg.Name)}u8.ToArray();");
+        if (args.Count > 0) sb.AppendLine();
+
         // JSON type info is resolved once per call site instead of on every log.
         foreach (var arg in args.Where(a => IsJson(a) && jsonContext != null && a.IsTypeNameExact))
         {
@@ -503,6 +508,7 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
         sb.AppendLine();
 
         sb.AppendLine($"            public global::System.ReadOnlySpan<char> OriginalFormat => {template};");
+        sb.AppendLine($"            public global::System.ReadOnlySpan<byte> OriginalFormatUtf8 => {template}u8;");
         sb.AppendLine();
 
         sb.AppendLine("            public void FormatTo(global::System.Buffers.IBufferWriter<byte> writer)");
@@ -521,6 +527,36 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
             else
             {
                 sb.AppendLine($"                _arg{part.Index}.FormatTo(writer);");
+            }
+        }
+        sb.AppendLine("            }");
+        sb.AppendLine();
+
+        // Same rendering, recording each value's byte range so sinks can reuse it instead of formatting again.
+        sb.AppendLine($"            public int ParameterCount => {args.Count};");
+        sb.AppendLine();
+        sb.AppendLine($"            public void FormatTo({AbstractionsNs}.IPositionedBufferWriter writer, int[] valueRanges)");
+        sb.AppendLine("            {");
+        if (args.Any(a => a.Alignment == 0)) sb.AppendLine("                int start;");
+        foreach (var part in call.Parts)
+        {
+            if (part.IsLiteral)
+            {
+                if (part.Text.Length > 0)
+                    sb.AppendLine($"                global::System.Buffers.BuffersExtensions.Write<byte>(writer, {Literal(part.Text)}u8);");
+            }
+            else if (part.Alignment != 0)
+            {
+                // Padded output is not the plain value: mark it as not reusable.
+                sb.AppendLine($"                _arg{part.Index}.FormatTo(writer, {part.Alignment});");
+                sb.AppendLine($"                valueRanges[{2 * part.Index}] = -1;");
+            }
+            else
+            {
+                sb.AppendLine("                start = writer.WrittenCount;");
+                sb.AppendLine($"                _arg{part.Index}.FormatTo(writer);");
+                sb.AppendLine($"                valueRanges[{2 * part.Index}] = start;");
+                sb.AppendLine($"                valueRanges[{2 * part.Index + 1}] = writer.WrittenCount - start;");
             }
         }
         sb.AppendLine("            }");
@@ -598,7 +634,7 @@ public partial class ZeroAllocLoggerGenerator : IIncrementalGenerator
                 formatArg = "null";
             }
 
-            ctorArgs.Add($"new {AbstractionsNs}.LogParameter<{GetWrapperType(arg)}>({Literal(arg.Name)}, {valueExpr}, {formatArg})");
+            ctorArgs.Add($"new {AbstractionsNs}.LogParameter<{GetWrapperType(arg)}>({Literal(arg.Name)}, __name_{id}_{arg.Index}, {valueExpr}, {formatArg})");
         }
 
         string state = $"new {structName}({string.Join(", ", ctorArgs)})";
