@@ -168,6 +168,174 @@ namespace Microsoft.Extensions.Logging
         }
 
         /// <summary>
+        /// Formats and writes a trace log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogTrace(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogTraceHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a trace log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogTrace(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogTraceHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a debug log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogDebug(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogDebugHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a debug log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogDebug(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogDebugHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an information log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogInformation(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogInformationHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an information log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogInformation(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogInformationHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a warning log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogWarning(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogWarningHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a warning log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogWarning(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogWarningHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an error log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogError(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogErrorHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes an error log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogError(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogErrorHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a critical log message with an event id.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogCritical(this ILogger logger,
+                                    EventId eventId,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogCriticalHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
+        /// Formats and writes a critical log message with an event id and an exception.
+        /// </summary>
+        /// <param name="logger">The <see cref="ILogger"/> to write to.</param>
+        /// <param name="eventId">The event id associated with the log.</param>
+        /// <param name="exception">The exception to log.</param>
+        /// <param name="handler">The interpolated string handler containing the structured template and arguments.</param>
+        public static void LogCritical(this ILogger logger,
+                                    EventId eventId,
+                                    Exception? exception,
+                                    [InterpolatedStringHandlerArgument("logger")] ref LogCriticalHandler handler)
+        {
+            CleanUp(ref handler.Bytes, ref handler.References);
+        }
+
+        /// <summary>
         /// Formats the message and creates a logical operation scope using advanced interpolated string logging.
         /// </summary>
         /// <remarks>
