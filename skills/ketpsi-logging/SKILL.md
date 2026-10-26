@@ -175,10 +175,7 @@ The generator wires the context into every `:json` call site and also sets it as
 
 ### NativeAOT and trimming
 
-The packages are NativeAOT-safe. Generated code registers each log-state type and each logged value type in a module initializer, so the providers never use `MakeGenericMethod` or other runtime reflection. Builds may still show `IL2026`/`IL3050` warnings for:
-
-- the `:json` reflection fallback (fixed by registering a serializer context);
-- `AddZeroAllocConsole` / `AddZeroAllocOtlp` binding options from configuration. To clear these, enable the configuration binding source generator in the app: `<EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>`.
+The packages are NativeAOT-safe. Generated code registers each log-state type and each logged value type in a module initializer, so the providers never use `MakeGenericMethod` or other runtime reflection. Both providers read `Logging:Console` / `Logging:OpenTelemetry` explicitly rather than through the reflection binder, so `appsettings.json` settings apply under AOT too. The only remaining KetPsi trim/AOT warning comes from the `:json` reflection fallback; registering a serializer context fixes it.
 
 ## 4. OTLP record shape
 
@@ -209,4 +206,3 @@ The packages are NativeAOT-safe. Generated code registers each log-state type an
 - Plain MEL calls (non-interpolated templates, `LoggerMessage`, framework logs) still work. They go through each provider's fallback path, which is correct but allocates.
 - Structs that contain references (for example `KeyValuePair<string, int>` or a record struct with a `string`) are boxed by the interpolated-string handler. Log their members instead to stay at zero allocations.
 - `:json:indexed` allocates while expanding JSON into OTLP attributes. `:json` (a single string attribute) does not.
-- `AddZeroAllocConsole` reads `IConfiguration` from DI, so register it when you don't use a generic host.
