@@ -6,6 +6,7 @@ using KetPsi.Extensions.Logging.Console.Internals.ZeroAllocLogger;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Configuration;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 
@@ -22,16 +23,23 @@ public static partial class ConsoleLoggerExtensions
         var services = config.Services;
 
         configure(new ZeroAllocConsoleLoggerConfig());
-        services.AddOptions<ConsoleLoggerOptions>().BindConfiguration("Logging:Console");
-        services.AddOptions<SimpleConsoleFormatterOptions>().BindConfiguration("Logging:Console:FormatterOptions");
-        services.AddOptions<ZeroAllocConsoleFormatterOptions>().BindConfiguration("Logging:Console:FormatterOptions");
+
+        // Read Logging:Console explicitly (NativeAOT-safe; the reflection binder bound nothing under AOT).
+        // ILoggerProviderConfiguration comes from AddConfiguration, so no IConfiguration registration is needed.
+        config.AddConfiguration();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<ConsoleLoggerOptions>, ConsoleLoggerOptionsSetup>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<ZeroAllocConsoleFormatterOptions>, ZeroAllocConsoleFormatterOptionsSetup>());
+
+        // Keep reacting to configuration reloads, as the binder-based registration did.
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOptionsChangeTokenSource<ConsoleLoggerOptions>,
+            LoggerProviderOptionsChangeTokenSource<ConsoleLoggerOptions, ZeroAllocationConsoleLoggerProvider>>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IOptionsChangeTokenSource<ZeroAllocConsoleFormatterOptions>,
+            LoggerProviderOptionsChangeTokenSource<ZeroAllocConsoleFormatterOptions, ZeroAllocationConsoleLoggerProvider>>());
 
         // 1. Register the formatters
         services.TryAddSingleton<SimpleConsoleFormatter>();
         services.TryAddSingleton<JsonConsoleFormatter>();
         services.TryAddSingleton<SystemdConsoleFormatter>();
-
-        Microsoft.Extensions.Logging.Configuration.LoggerProviderOptions.RegisterProviderOptions<ConsoleLoggerOptions, ZeroAllocationConsoleLoggerProvider>(services);
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, ZeroAllocationConsoleLoggerProvider>(sp =>
         {
