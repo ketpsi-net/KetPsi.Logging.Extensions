@@ -16,12 +16,13 @@ namespace KetPsi.Extensions.Logging.OpenTelemetry
         }
         public static ILoggingBuilder AddZeroAllocOtlp(this ILoggingBuilder builder, Func<IZeroAllocOtlpOptionsBuilder, IZeroAllocOtlpOptionsBuilder> options)
         {
-            // 1. Ensure the logging configuration system is active. RegisterProviderOptions below needs it;
-            //    hosts add it already, but a bare ServiceCollection/LoggerFactory does not (it would throw).
+            // 1. Ensure the logging configuration system is active. The options setup below needs
+            //    ILoggerProviderConfiguration; hosts add it already, but a bare ServiceCollection/LoggerFactory does not.
             builder.AddConfiguration();
 
-            // 2. Bind the "Logging:OpenTelemetry" section of appsettings.json to KetPsiOtlpOptions
-            Microsoft.Extensions.Logging.Configuration.LoggerProviderOptions.RegisterProviderOptions<KetPsiOtlpOptions, ZeroAllocOtlpLoggerProvider>(builder.Services);
+            // 2. Read the "Logging:OpenTelemetry" section explicitly (NativeAOT-safe; the reflection binder
+            //    used by RegisterProviderOptions bound nothing under AOT).
+            builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<IConfigureOptions<KetPsiOtlpOptions>, KetPsiOtlpOptionsSetup>());
 
             // 4. Register the Logger Provider itself
             builder.Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILoggerProvider, ZeroAllocOtlpLoggerProvider>(sp =>

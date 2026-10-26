@@ -29,9 +29,11 @@ public class ZeroAllocOtlpLoggerBehaviorTests
     private sealed class BlockingHandler : HttpMessageHandler
     {
         public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Requests;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref Requests);
             await Release.Task.WaitAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
         }
@@ -130,9 +132,20 @@ public class ZeroAllocOtlpLoggerBehaviorTests
         string padding = new('x', 4_000);
         try
         {
-            // The worker holds one batch in flight and the queue holds one more; from then on the queue stays full.
-            for (int i = 0; i < 2_000; i++)
+            // 1. Produce until the worker holds a batch in flight (it blocks in the handler from then on).
+            //    Waiting for this matters: if the worker starts late, it would dequeue mid-test and clear saturation.
+            int i = 0;
+            while (Volatile.Read(ref handler.Requests) == 0 && i < 100_000)
+            {
                 logger.LogInformation($"{padding:@Padding} {i:@I}");
+                if (batcher.IsSaturated) Thread.Sleep(1); // queue full: give the worker time to pick up its batch
+                i++;
+            }
+            Assert.Equal(1, Volatile.Read(ref handler.Requests));
+
+            // 2. Fill the queue behind it; with the worker blocked, the queue now stays full.
+            for (int j = 0; j < 2_000; j++)
+                logger.LogInformation($"{padding:@Padding} {j:@I}");
 
             Assert.True(batcher.IsSaturated);
             Assert.True(batcher.DroppedRecords > 0);
