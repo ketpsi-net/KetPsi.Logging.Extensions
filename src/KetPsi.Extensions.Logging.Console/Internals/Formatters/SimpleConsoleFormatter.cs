@@ -98,7 +98,7 @@ internal sealed class SimpleConsoleFormatter : IZeroAllocConsoleFormatter, IDisp
         {
             buffer.Write("\n"u8);
             if (useColors) buffer.Write("\x1b[31m"u8);
-            WriteString(buffer, exception.ToString());
+            ExceptionWriter.Write(buffer, exception);
             if (useColors) buffer.Write("\x1b[0m"u8);
         }
 

@@ -75,7 +75,7 @@ This package is typically consumed implicitly by the specific KetPsi logger impl
 
 ```xml
 <PropertyGroup>
-  <TargetFramework>net8.0</TargetFramework>
+  <TargetFramework>net11.0</TargetFramework>
   <ImplicitUsings>enable</ImplicitUsings>
   <Nullable>enable</Nullable>
   <!-- REQUIRED: Opt-in to C# 12 Interceptors -->
