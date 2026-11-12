@@ -35,7 +35,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.x'
+          dotnet-version: '11.x'
       - name: Run tests
         run: dotnet test tests/KetPsi.Extensions.Logging.Tests/KetPsi.Extensions.Logging.Tests.csproj /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura --logger:"junit;LogFilePath=test-result.xml;MethodFormat=Class;FailureBodyFormat=Verbose"
 

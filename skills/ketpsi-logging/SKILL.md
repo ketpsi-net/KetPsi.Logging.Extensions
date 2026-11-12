@@ -13,7 +13,7 @@ KetPsi turns ordinary interpolated-string log calls into zero-allocation structu
 | `KetPsi.Extensions.Logging.Console` | Zero-alloc console provider. Drop-in replacement for the MEL console logger that reads the same `Logging:Console` config. |
 | `KetPsi.Extensions.Logging.OpenTelemetry` | Zero-alloc OTLP/HTTP protobuf log exporter. Does not use the OpenTelemetry SDK. |
 
-Target frameworks: net8.0, net9.0, net10.0.
+Target frameworks: net9.0, net10.0, net11.0.
 
 ## 1. Project setup (required)
 
@@ -33,7 +33,7 @@ Every project that **contains log calls** must opt in to the interceptor namespa
 </PropertyGroup>
 ```
 
-> ⚠️ Without this property the compiler rejects the generated interceptors. If the generator itself fails to load, the compiler shows a `CS8032` warning, and KetPsi's `LogX($"...")` overloads then only release their buffers and **log nothing**. That usually means the SDK is too old for the analyzer's Roslyn version, so use the .NET 10 SDK.
+> ⚠️ Without this property the compiler rejects the generated interceptors. If the generator itself fails to load, the compiler shows a `CS8032` warning, and KetPsi's `LogX($"...")` overloads then only release their buffers and **log nothing**. That usually means the SDK is too old for the analyzer's Roslyn version, so use the .NET 10 SDK or later (the .NET 11 SDK to target net11.0).
 
 ## 2. Register providers
 
