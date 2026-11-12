@@ -39,6 +39,13 @@ internal sealed class SystemdConsoleFormatter : IZeroAllocConsoleFormatter
             buffer.Advance(msgWritten);
         }
 
+        // journald treats every newline as a new entry, so the exception follows the message on the same line.
+        if (exception != null)
+        {
+            buffer.Write(" "u8);
+            ExceptionWriter.WriteSingleLine(buffer, exception);
+        }
+
         buffer.Write("\n"u8);
     }
 }
